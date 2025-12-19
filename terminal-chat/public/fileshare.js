@@ -15,10 +15,9 @@ let isZipBatchMode = false;
 const peers = {};
 const iceConfig = {
     iceServers: [
+        // Wir nutzen nur die zwei zuverlässigsten Google Server
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' },
-        { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:global.stun.twilio.com:3478' }
+        { urls: 'stun:stun1.l.google.com:19302' }
     ]
 };
 const jsonChunkBuffer = {};
@@ -28,7 +27,7 @@ const lifeCycleChannel = new BroadcastChannel('terminal_chat_lifecycle');
 
 lifeCycleChannel.onmessage = (event) => {
     if (event.data.type === 'MASTER_DISCONNECT') {
-        console.log("Master session ended. Closing interface...");
+        console.log("Master session ended.");
         window.close();
     }
 };
@@ -38,66 +37,45 @@ const user = localStorage.getItem('fs_username');
 const userKey = localStorage.getItem('fs_key');
 
 if(!user) {
-    document.body.innerHTML = `
-        <div style="display:flex; justify-content:center; align-items:center; height:100vh; flex-direction:column; color:red;">
-            <h1>ACCESS DENIED</h1>
-            <p>Please login via TERMINAL_CHAT first.</p>
-            <button onclick="window.close()" style="background:#000; color:#0f0; border:1px solid #0f0; padding:10px;">CLOSE</button>
-        </div>
-    `;
+    document.body.innerHTML = `<div style="display:flex;justify-content:center;align-items:center;height:100vh;color:red;"><h1>ACCESS DENIED</h1></div>`;
     throw new Error("No Auth");
 }
 
 console.log(`SYSTEM: Initialized for user ${user}`);
 
-// --- MOCK DATA ---
-const mockFileSystem = {
-    'share1': {
-        name: 'PROJECT_OMEGA',
-        user: 'Neo',
-        files: [
-            { type: 'folder', name: 'Blueprints', content: [] },
-            { type: 'file', name: 'passwords.txt', content: 'ROOT: admin123\nUSER: guest' }
-        ]
-    }
-};
-
-renderSidebarMock();
-
 // --- SOCKET EVENTS ---
 socket.on('connect', () => {
     console.log("Connected to File System Network");
-    const savedUser = localStorage.getItem('fs_username');
-    if (savedUser) {
-        socket.emit('fs_login', { username: savedUser, key: localStorage.getItem('fs_key') });
+    if (localStorage.getItem('fs_username')) {
+        socket.emit('fs_login', { username: localStorage.getItem('fs_username'), key: localStorage.getItem('fs_key') });
     }
     socket.emit('fs_request_update');
 });
 
 socket.on('fs_update_shares', (sharesList) => {
     if (currentActivePeerId && !sharesList[currentActivePeerId]) {
-        console.log("Active host disconnected.");
         closePreview();
-        document.getElementById('fileGrid').innerHTML = '<div class="empty-state" style="color:red;">&lt; SIGNAL LOST: HOST DISCONNECTED &gt;</div>';
+        document.getElementById('fileGrid').innerHTML = '<div class="empty-state" style="color:red;">&lt; HOST DISCONNECTED &gt;</div>';
         currentActivePeerId = null;
-        currentActiveFolderName = "ROOT";
-        updateBreadcrumbs(['ROOT']);
     }
     renderSidebar(sharesList);
 });
 
-// Empfängt Signale und loggt sie
 socket.on('p2p_signal', async (data) => {
-    console.log(`[SIGNAL] Received ${data.type.toUpperCase()} from ${data.senderId}`); // DEBUG LOG
+    // Logge eingehende Signale, um zu sehen, ob eine IP dabei ist
+    if(data.type === 'candidate') {
+        console.log(`[SIGNAL] Received CANDIDATE from ${data.senderId}:`, data.signal.candidate);
+    } else {
+        console.log(`[SIGNAL] Received ${data.type.toUpperCase()} from ${data.senderId}`);
+    }
     await handleP2PMessage(data.senderId, data.signal, data.type);
 });
 
-// --- P2P CONNECTION LOGIC (DEBUG VERSION) ---
+// --- P2P CONNECTION LOGIC (RELAXED VERSION) ---
 
-// 1. Verbindung starten (Als GAST / SENDER)
+// 1. Verbindung starten
 async function connectToPeer(targetId) {
     if (peers[targetId]) {
-        console.warn(`Resetting connection to ${targetId}`);
         if(peers[targetId].connection) peers[targetId].connection.close();
         if(peers[targetId].channel) peers[targetId].channel.close();
         delete peers[targetId];
@@ -106,7 +84,6 @@ async function connectToPeer(targetId) {
     console.log(`Starting connection to ${targetId}...`);
 
     const pc = new RTCPeerConnection(iceConfig);
-
     let iceQueue = [];
     let offerSent = false;
 
@@ -130,10 +107,14 @@ async function connectToPeer(targetId) {
     };
 
     pc.oniceconnectionstatechange = () => {
-        console.log(`ICE State (${targetId}): ${pc.iceConnectionState}`);
-        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
+        const state = pc.iceConnectionState;
+        console.log(`ICE State (${targetId}): ${state}`);
+
+        // RELAXED FIX: Wir ignorieren 'disconnected', da es sich oft erholt.
+        // Wir reagieren nur auf 'failed'.
+        if (state === 'failed') {
             const grid = document.getElementById('fileGrid');
-            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>CHECK FIREWALL OR TRY INCOGNITO.</div>';
+            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>Network blocked P2P. Try using a Hotspot.</div>';
         }
     };
 
@@ -146,27 +127,24 @@ async function connectToPeer(targetId) {
         offerSent = true;
 
         if (iceQueue.length > 0) {
-            console.log(`Flushing ${iceQueue.length} buffered candidates.`);
             iceQueue.forEach(c => socket.emit('p2p_signal', { targetId: targetId, type: 'candidate', signal: c }));
         }
 
     } catch (err) {
-        console.error("Error creating connection:", err);
+        console.error("Connection Error:", err);
     }
 }
 
-// 2. Eingehende Signale verarbeiten
+// 2. Signale verarbeiten
 async function handleP2PMessage(senderId, signal, type) {
-
-    // FALL A: ZU FRÜHE CANDIDATES (Chrome Fix)
+    // A: Frühe Candidates
     if (!peers[senderId] && type === 'candidate') {
-        console.log(`[Cache] Storing early candidate from ${senderId}`);
         if (!earlyCandidates[senderId]) earlyCandidates[senderId] = [];
         earlyCandidates[senderId].push(signal);
         return;
     }
 
-    // FALL B: NEUES ANGEBOT (OFFER)
+    // B: Offer (Neue Verbindung)
     if (type === 'offer') {
         if (peers[senderId]) {
             if(peers[senderId].connection) peers[senderId].connection.close();
@@ -188,14 +166,9 @@ async function handleP2PMessage(senderId, signal, type) {
             }
         };
 
-        peers[senderId] = {
-            connection: pc,
-            channel: null,
-            pendingQueue: []
-        };
+        peers[senderId] = { connection: pc, channel: null, pendingQueue: [] };
 
         if (earlyCandidates[senderId]) {
-            console.log(`[Cache] Found ${earlyCandidates[senderId].length} early candidates.`);
             peers[senderId].pendingQueue.push(...earlyCandidates[senderId]);
             delete earlyCandidates[senderId];
         }
@@ -211,14 +184,10 @@ async function handleP2PMessage(senderId, signal, type) {
             await pc.setRemoteDescription(new RTCSessionDescription(signal));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
-
-            console.log("Sending Answer...");
             socket.emit('p2p_signal', { targetId: senderId, type: 'answer', signal: answer });
-
             processPendingQueue(p, pc);
         }
         else if (type === 'answer') {
-            console.log("Setting Remote Description (Answer)...");
             await pc.setRemoteDescription(new RTCSessionDescription(signal));
             processPendingQueue(p, pc);
         }
@@ -226,31 +195,26 @@ async function handleP2PMessage(senderId, signal, type) {
             if (!pc.remoteDescription || pc.remoteDescription.type === null) {
                 p.pendingQueue.push(signal);
             } else {
-                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => console.warn("Candidate Error:", e));
+                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => console.warn("ICE Error:", e));
             }
         }
-    } catch (e) {
-        console.error("WebRTC Error:", e);
-    }
+    } catch (e) { console.error("WebRTC Logic Error:", e); }
 }
 
-// 3. Queue Helper
 async function processPendingQueue(peerObj, pc) {
     if (peerObj.pendingQueue.length > 0) {
-        console.log(`Processing ${peerObj.pendingQueue.length} queued candidates.`);
         for (const candidate of peerObj.pendingQueue) {
-            try {
-                await pc.addIceCandidate(new RTCIceCandidate(candidate));
-            } catch (e) { console.warn("Candidate skip:", e); }
+            try { await pc.addIceCandidate(new RTCIceCandidate(candidate)); } catch (e) {}
         }
         peerObj.pendingQueue = [];
     }
 }
 
-// 4. Kanal Events
+// 3. Channel Events
 function setupChannelHandlers(channel, peerId) {
     channel.onopen = () => {
-        console.log(`CHANNEL OPENED with ${peerId} -> Requesting ROOT`);
+        console.log(`CHANNEL OPENED with ${peerId}`);
+        // Wenn Kanal offen ist, sofort Liste anfordern!
         channel.send(JSON.stringify({ type: 'REQUEST_ROOT' }));
     };
 
@@ -265,105 +229,72 @@ function setupChannelHandlers(channel, peerId) {
             }
         }
     };
-
-    channel.onclose = () => {
-        console.log(`Channel closed with ${peerId}`);
-        delete peers[peerId];
-    };
-    channel.onerror = (err) => console.error("Channel Error:", err);
+    channel.onclose = () => delete peers[peerId];
 }
 
-// --- FILE SYSTEM LOGIC & PROTOCOL ---
+// --- FILE SYSTEM LOGIC ---
 
 function handleChannelMessage(msg, peerId, channel) {
 
+    // Chunk Reassembly
     if (msg.type === 'JSON_CHUNK') {
         if (!jsonChunkBuffer[peerId]) jsonChunkBuffer[peerId] = '';
         jsonChunkBuffer[peerId] += msg.data;
         if (msg.isLast) {
-            const fullMessage = JSON.parse(jsonChunkBuffer[peerId]);
+            const full = JSON.parse(jsonChunkBuffer[peerId]);
             delete jsonChunkBuffer[peerId];
-            handleChannelMessage(fullMessage, peerId, channel);
+            handleChannelMessage(full, peerId, channel);
         }
         return;
     }
 
+    // Host
     if (msg.type === 'REQUEST_ROOT') {
-        const rootItems = getItemsInPath(myHostedFiles, myRootFolderName);
-        sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: rootItems, path: myRootFolderName });
+        const items = getItemsInPath(myHostedFiles, myRootFolderName);
+        sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: items, path: myRootFolderName });
     }
-
     if (msg.type === 'REQUEST_DIRECTORY') {
         const items = getItemsInPath(myHostedFiles, msg.path);
         sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: items, path: msg.path });
     }
-
     if (msg.type === 'REQUEST_DOWNLOAD') {
-        console.log(`[HOST] Incoming request for: "${msg.filename}"`);
-        let requestedFile = myHostedFiles.find(f => f.webkitRelativePath === msg.filename);
-        if (!requestedFile) requestedFile = myHostedFiles.find(f => f.name === msg.filename);
-        if (!requestedFile) requestedFile = myHostedFiles.find(f => f.webkitRelativePath.endsWith(msg.filename));
+        let file = myHostedFiles.find(f => f.webkitRelativePath === msg.filename || f.name === msg.filename);
+        if(!file) file = myHostedFiles.find(f => f.webkitRelativePath.endsWith(msg.filename));
 
-        if (requestedFile) {
-            streamFileToPeer(requestedFile, channel);
-        } else {
-            channel.send(JSON.stringify({ type: 'ERROR', message: `File not found on host: ${msg.filename}` }));
-        }
+        if (file) streamFileToPeer(file, channel);
+        else channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found.' }));
     }
-
     if (msg.type === 'REQUEST_RECURSIVE_LIST') {
         const files = getAllFilesInPathRecursive(myHostedFiles, msg.path);
-        const metaList = files.map(f => ({
-            fullPath: f.webkitRelativePath,
-            relativePath: msg.path ? f.webkitRelativePath.substring(msg.path.length + 1) : f.webkitRelativePath
-        }));
-        sendLargeJSON(channel, 'RESPONSE_RECURSIVE_LIST', { list: metaList });
+        const list = files.map(f => ({ fullPath: f.webkitRelativePath, relativePath: msg.path ? f.webkitRelativePath.substring(msg.path.length+1) : f.webkitRelativePath }));
+        sendLargeJSON(channel, 'RESPONSE_RECURSIVE_LIST', { list });
     }
 
+    // Client
     if (msg.type === 'RESPONSE_DIRECTORY') {
         currentPathStr = msg.payload.path;
-        const crumbs = currentPathStr.split('/');
-        updateBreadcrumbs(['ROOT', ...crumbs]);
+        updateBreadcrumbs(['ROOT', ...currentPathStr.split('/')]);
         renderRemoteGrid(msg.payload.items, peerId);
     }
-
     if (msg.type === 'RESPONSE_RECURSIVE_LIST') {
-        console.log(`Starting Batch Download for ${msg.payload.list.length} files.`);
         zipQueue = msg.payload.list;
         processZipQueue();
     }
-
     if (msg.type === 'ERROR') {
-        console.error("P2P Error:", msg.message);
-        if (isZipBatchMode) {
-            processZipQueue();
-        } else if (isPreviewMode) {
-            document.getElementById('previewContent').innerHTML = `<div style="color:red; text-align:center; margin-top:20%;">${msg.message}</div>`;
-        } else {
-            alert("Error: " + msg.message);
-        }
+        console.error(msg.message);
+        if(isZipBatchMode) processZipQueue();
+        else alert("Error: " + msg.message);
         incomingFileBuffer = [];
     }
-
     if (msg.type === 'FILE_CHUNK') {
-        const chunkData = base64ToArrayBuffer(msg.data);
-        incomingFileBuffer.push(chunkData);
-
+        incomingFileBuffer.push(base64ToArrayBuffer(msg.data));
         if (msg.isLast) {
             const blob = new Blob(incomingFileBuffer, {type: 'application/octet-stream'});
-
             if (isZipBatchMode) {
-                let zipPath = msg.filename;
-                if (currentPathStr && zipPath.startsWith(currentPathStr + '/')) {
-                    zipPath = zipPath.substring(currentPathStr.length + 1);
-                } else if (zipPath.startsWith(currentPathStr)) {
-                    zipPath = zipPath.substring(currentPathStr.length);
-                    if(zipPath.startsWith('/')) zipPath = zipPath.substring(1);
-                }
-                if (zipInstance) zipInstance.file(zipPath, blob);
-                incomingFileBuffer = [];
-                processZipQueue();
-
+                let p = msg.filename;
+                if (currentPathStr && p.startsWith(currentPathStr)) p = p.substring(currentPathStr.length + 1);
+                if(zipInstance) zipInstance.file(p, blob);
+                incomingFileBuffer = []; processZipQueue();
             } else if (isPreviewMode) {
                 renderRemoteBlob(blob, msg.filename);
                 incomingFileBuffer = [];
