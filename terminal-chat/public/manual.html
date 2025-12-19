@@ -1,0 +1,71 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SYSTEM MANUAL</title>
+    <link rel="stylesheet" href="style.css">
+    <style>
+        /* Spezifische Styles für die Manual Page */
+        .manual-container {
+            width: 80%;
+            max-width: 800px;
+            height: 100vh;
+            overflow-y: auto;
+            padding: 40px;
+            box-sizing: border-box;
+        }
+        h1 { color: #ff9d00; border-bottom: 2px solid #ff9d00; padding-bottom: 10px; }
+        h2 { color: #e0e0e0; margin-top: 30px; text-decoration: underline; }
+        p { color: #888; line-height: 1.6; }
+        .cmd { color: #ffffff; font-weight: bold; background: #222; padding: 2px 6px; }
+        .param { color: #ff3333; } /* Rot für Parameter */
+        ul { list-style-type: square; color: #888; }
+        li { margin-bottom: 8px; }
+
+        /* Zurück-Link */
+        .back-link { display: block; margin-top: 50px; color: #ff9d00; text-decoration: none; }
+        .back-link:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+<div class="crt-overlay"></div>
+
+<div class="manual-container">
+    <h1>SECURE_CHAT_V1 // MANUAL</h1>
+    <p>This system provides an ephemeral, end-to-end encrypted communication channel. No logs. No trace.</p>
+
+    <h2>1. CONNECTION PROTOCOL</h2>
+    <ul>
+        <li>Every session generates a unique, temporary <strong>Session Key</strong>.</li>
+        <li>Encryption: <strong>ECDH P-256 + AES-GCM (256-bit)</strong>.</li>
+        <li>Keys are generated locally in your browser. The server never sees them.</li>
+    </ul>
+
+    <h2>2. COMMAND LIST</h2>
+
+    <p><span class="cmd">/connect</span> <span class="param">[KEY]</span><br>
+        Initiates a secure handshake with another user using their Session Key.</p>
+
+    <p><span class="cmd">/ping</span> <span class="param">[NAME]</span><br>
+        Scans the network for active users with a specific name. Returns their Session Key.</p>
+
+    <p><span class="cmd">/info</span> <span class="param">[KEY]</span><br>
+        Runs a deep trace on a specific Key. Reveals IP status, OS fingerprint, and login time.</p>
+
+    <p><span class="cmd">/ghost</span><br>
+        Toggles <strong>Stealth Mode</strong>. Makes you invisible to network scans (/ping).</p>
+
+    <p><span class="cmd">/clear</span><br>
+        Wipes the terminal screen output.</p>
+
+    <h2>3. SECURITY WARNINGS</h2>
+    <p>
+        This system is protected against Man-in-the-Middle attacks via <strong>SAS Fingerprinting</strong>.<br>
+        Always compare the "Digital Fingerprint" shown at chat start with your partner via a secondary channel.
+    </p>
+
+    <a href="javascript:window.close()" class="back-link">&lt; CLOSE MANUAL</a>
+</div>
+</body>
+</html>

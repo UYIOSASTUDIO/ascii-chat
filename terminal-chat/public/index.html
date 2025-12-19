@@ -1,0 +1,74 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, interactive-widget=resizes-content">    <title>TERMINAL CHAT v1.0</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<header class="top-header">
+    <div class="logo">TERMINAL_CHAT</div>
+    <div class="header-nav">
+        <button onclick="window.location.reload()">MAIN_SITE</button>
+        <button onclick="openFileSystem()">FILE_SYSTEM</button>
+    </div>
+</header>
+
+<div class="main-grid">
+
+    <div class="sidebar-col">
+        <div class="panel-header">[ACTIVE_UPLINKS]</div>
+        <div id="chat-list">
+        </div>
+    </div>
+
+    <div class="terminal-col">
+        <div id="drop-overlay">
+            <div class="drop-box">>>> INITIATE DATA TRANSFER <<< <br> [ DROP FILE HERE ]</div>
+        </div>
+
+        <div id="output"></div>
+
+        <div class="input-area">
+            <span id="prompt" class="prompt">&gt;</span>
+            <div class="input-wrapper">
+                <input type="text" id="command-input" autocomplete="off" spellcheck="false" autofocus>
+                <div id="cmd-mirror">
+                    <span id="mirror-text"></span><span id="cursor-block">&nbsp;</span><span id="mirror-right"></span>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="side-col">
+        <div class="panel-window">
+            <div class="panel-header">[Public_Promoted_Chats]</div>
+            <div id="promo-list" class="panel-content">
+                <div class="system-msg">Scanning frequencies...</div>
+            </div>
+        </div>
+
+        <div id="info-window" class="panel-window">
+            <div class="panel-header">/// AUDIO_UPLINK ///</div>
+            <div id="voice-panel">
+                <div id="voice-status" class="system-msg">SYSTEM IDLE</div>
+                <div class="voice-visualizer">
+                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                    <div class="bar"></div>
+                </div>
+                <div id="voice-controls">
+                    <button class="voice-btn" style="border-color:#333; color:#333; cursor:not-allowed;">[ OFFLINE ]</button>
+                </div>
+                <audio id="remote-audio" autoplay></audio>
+            </div>
+        </div>
+    </div>
+
+</div>
+
+<script src="/socket.io/socket.io.js"></script>
+<script src="client.js"></script>
+</body>
+</html>

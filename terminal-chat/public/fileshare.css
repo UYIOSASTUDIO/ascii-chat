@@ -1,0 +1,265 @@
+/* --- GLOBAL STYLE (Hacker Theme) --- */
+html, body {
+    height: 100%;
+    margin: 0;
+    overflow: hidden; /* Verhindert Scrollen der ganzen Seite */
+}
+
+body {
+    background-color: #000;
+    color: #0f0;
+    font-family: 'Courier New', Courier, monospace;
+    margin: 0;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+}
+
+/* HEADER */
+header {
+    border-bottom: 2px solid #0f0;
+    padding: 10px 20px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: #111;
+    height: 50px;
+}
+
+.header-title { font-weight: bold; font-size: 1.2em; text-shadow: 0 0 5px #0f0; }
+.back-btn {
+    background: #000; color: #0f0; border: 1px solid #0f0;
+    padding: 5px 15px; cursor: pointer; font-family: inherit;
+    font-weight: bold;
+}
+.back-btn:hover { background: #0f0; color: #000; }
+
+.main-container {
+    display: flex;
+    height: calc(100vh - 60px); /* Höhe minus Header (ca 60px) */
+    overflow: hidden;
+}
+
+/* SIDEBAR (30%) */
+.sidebar {
+    width: 30%;
+    min-width: 250px;
+    border-right: 2px solid #0f0;
+    display: flex;
+    flex-direction: column;
+    background: #050505;
+}
+
+.sidebar-header {
+    padding: 10px;
+    background: #0f0;
+    color: #000;
+    font-weight: bold;
+    text-align: center;
+}
+
+.share-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    overflow-y: auto;
+}
+
+.share-item {
+    padding: 15px;
+    border-bottom: 1px solid #333;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.share-item:hover { background: #111; border-left: 4px solid #0f0; }
+.share-item.active { background: #222; border-left: 4px solid #0f0; color: #fff; }
+
+.share-name { font-weight: bold; display: block; }
+.share-user { font-size: 0.8em; color: #888; display: block; margin-top: 4px; }
+
+/* CONTENT AREA (70%) */
+.content-area {
+    flex: 1;
+    display: flex;
+    flex-direction: column; /* Stapelt Actions, Grid/Preview, Breadcrumbs */
+    height: 100%;
+    overflow: hidden; /* WICHTIG: Begrenzt die Höhe */
+    background-color: #000; /* Sicherstellen, dass Hintergrund schwarz ist */
+    position: relative;
+}
+
+/* In public/fileshare.css hinzufügen/anpassen: */
+
+.file-grid {
+    flex: 1;           /* Nimmt den gesamten freien Platz ein */
+    overflow: auto;    /* Erlaubt scrollen, wenn viele Dateien da sind */
+    display: grid;     /* Behält das Grid-Layout bei */
+    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); /* Responsives Grid */
+    gap: 15px;         /* Abstand zwischen Icons */
+    padding: 20px;     /* Innenabstand */
+    align-content: start; /* Icons starten oben, nicht mittig gestreckt */
+}
+
+.empty-state {
+    grid-column: 1 / -1;
+    text-align: center;
+    color: #555;
+    margin-top: 100px;
+    font-size: 1.2em;
+}
+
+.file-icon {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    text-align: center;
+    cursor: pointer;
+    padding: 10px;
+    border-radius: 5px;
+    border: 1px solid transparent;
+}
+.file-icon:hover {
+    background: #0a0a0a;
+    border: 1px solid #333;
+    box-shadow: 0 0 15px rgba(0, 255, 0, 0.2);
+}
+
+.icon-img {
+    width: 48px; height: 48px; margin-bottom: 8px;
+    fill: #0f0;
+}
+.file-label { font-size: 0.8em; word-break: break-all; }
+
+/* PREVIEW VIEW */
+.preview-pane {
+    display: none;
+    flex: 1;
+    flex-direction: column;
+    padding: 20px;
+    background: #0a0a0a;
+}
+
+.preview-toolbar {
+    display: flex;
+    justify-content: space-between;
+    margin-bottom: 15px;
+    padding-bottom: 10px;
+    border-bottom: 1px dotted #0f0;
+}
+
+#filePreview {
+    /* Nimmt den ganzen Platz zwischen Toolbar und Breadcrumbs */
+    flex: 1;
+    display: flex; /* Damit wir Toolbar und Content stapeln können */
+    flex-direction: column;
+    overflow: hidden; /* Der Container selbst scrollt nicht, nur der Inhalt */
+    min-height: 0; /* Wichtiger Flexbox Trick damit Scrolling geht */
+}
+
+/* 4. Der eigentliche Inhalt (Hier wird gescrollt!) */
+#previewContent {
+    flex: 1; /* Nimmt restlichen Platz */
+    overflow: auto; /* Zeigt Scrollbars an, wenn Inhalt zu groß ist */
+    padding: 20px;
+
+    /* Damit Textumbrüche korrekt sind und Code horizontal scrollt */
+    white-space: pre-wrap; /* Text bricht um */
+    word-break: break-word; /* Lange Wörter brechen um */
+
+    /* Optik */
+    color: #0f0;
+    font-family: 'Courier New', monospace;
+    background: #0a0a0a;
+    border: 1px solid #333;
+    margin: 10px;
+}
+
+/* 5. Bilder im Preview */
+#previewContent img {
+    /* Damit Bilder scrollbar werden, wenn sie riesig sind,
+       entfernen wir max-width oder setzen es auf none,
+       falls du reinzoomen willst.
+       Standardmäßig ist aber "fit to screen" meist besser: */
+    max-width: 100%;
+    height: auto;
+    display: block;
+    margin: 0 auto;
+}
+
+.btn-action {
+    background: transparent; border: 1px solid #0f0; color: #0f0;
+    padding: 5px 15px; cursor: pointer; font-family: inherit;
+}
+.btn-action:hover { background: #0f0; color: #000; }
+.btn-close { border-color: #f00; color: #f00; }
+.btn-close:hover { background: #f00; color: #fff; }
+
+.preview-content {
+    flex: 1;
+    border: 1px solid #333;
+    padding: 15px;
+    overflow: auto;
+    white-space: pre-wrap;
+    font-family: monospace;
+    background: #000;
+    color: #ddd;
+}
+
+/* BREADCRUMBS */
+.breadcrumb-bar {
+    height: 40px; /* Feste Höhe */
+    flex-shrink: 0; /* Darf nicht zusammengedrückt werden */
+    background: #111;
+    border-top: 1px solid #333;
+    display: flex;
+    align-items: center;
+    padding: 0 15px;
+    z-index: 10;
+}
+.crumb { color: #0f0; cursor: pointer; }
+.crumb:hover { text-decoration: underline; }
+.separator { margin: 0 5px; color: #555; }
+
+/* NEU: MOUNT CONTROLS */
+.mount-controls {
+    padding: 15px;
+    border-bottom: 2px solid #0f0;
+    background: #000;
+    text-align: center;
+}
+
+.btn-mount {
+    background: #000;
+    color: #0f0;
+    border: 1px dashed #0f0;
+    padding: 10px;
+    width: 100%;
+    cursor: pointer;
+    font-family: 'Courier New', Courier, monospace;
+    font-weight: bold;
+    text-transform: uppercase;
+    transition: all 0.2s;
+}
+
+.btn-mount:hover {
+    background: #0f0;
+    color: #000;
+    box-shadow: 0 0 10px #0f0;
+}
+
+.btn-danger {
+    color: #f00;
+    border-color: #f00;
+}
+.btn-danger:hover {
+    background: #f00;
+    color: #000;
+    box-shadow: 0 0 10px #f00;
+}
+
+/* Anpassung Sidebar Header (damit es passt) */
+.sidebar-header {
+    /* border-top entfernen falls vorher gesetzt */
+    border-top: none;
+}

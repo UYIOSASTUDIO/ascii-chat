@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SECURE FILE SYSTEM</title>
+    <link rel="stylesheet" href="fileshare.css">
+</head>
+<body>
+
+<header>
+    <div class="header-title">/// SECURE_FILE_SYSTEM</div>
+    <button class="back-btn" onclick="window.close()">CLOSE_SYSTEM</button>
+</header>
+
+<div class="main-container">
+
+    <aside class="sidebar">
+
+        <div class="mount-controls">
+            <button id="btnMount" class="btn-mount" onclick="triggerMount()">
+                [+] MOUNT LOCAL DRIVE
+            </button>
+            <button id="btnUnmount" class="btn-mount btn-danger" onclick="unmountDrive()" style="display:none;">
+                [-] UNMOUNT DRIVE
+            </button>
+            <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
+        </div>
+
+        <div class="sidebar-header">NETWORK DRIVES</div>
+        <ul class="share-list" id="shareList">
+            <li style="padding:15px; color:#555; font-size:0.8em; text-align:center;">
+                Waiting for signal...
+            </li>
+        </ul>
+    </aside>
+
+    <section class="content-area">
+
+        <div id="folderActions" style="padding: 10px 20px; display:none; border-bottom: 1px solid #333;">
+            <button id="btnZipDownload" class="btn-action" style="width:auto; font-size:0.9em;">
+                [ DOWNLOAD CURRENT FOLDER AS .ZIP ]
+            </button>
+        </div>
+
+        <div id="fileGrid" class="file-grid">
+            <div class="empty-state">
+                &lt; SELECT A DRIVE TO MOUNT &gt;
+            </div>
+        </div>
+
+        <div id="filePreview" class="preview-pane" style="display:none;">
+            <div class="preview-toolbar">
+                <button class="btn-action" onclick="downloadCurrentFile()">[ DOWNLOAD ]</button>
+                <span id="previewFileName" style="padding-top:5px;">filename.txt</span>
+                <button class="btn-action btn-close" onclick="closePreview()">[ X ] CLOSE</button>
+            </div>
+            <div id="previewContent" class="preview-content"></div>
+        </div>
+
+        <div class="breadcrumb-bar" id="breadcrumbs">
+            ROOT <span class="separator">></span>
+        </div>
+    </section>
+
+</div>
+
+<script src="./jszip.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="fileshare.js"></script>
+</body>
+</html>
