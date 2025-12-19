@@ -18,7 +18,6 @@ const iceConfig = {
         { urls: 'stun:stun.l.google.com:19302' },
         { urls: 'stun:stun1.l.google.com:19302' },
         { urls: 'stun:stun2.l.google.com:19302' },
-        { urls: 'stun:stun3.l.google.com:19302' },
         { urls: 'stun:global.stun.twilio.com:3478' }
     ]
 };
@@ -87,7 +86,9 @@ socket.on('fs_update_shares', (sharesList) => {
     renderSidebar(sharesList);
 });
 
+// Empfängt Signale und loggt sie
 socket.on('p2p_signal', async (data) => {
+    console.log(`[SIGNAL] Received ${data.type.toUpperCase()} from ${data.senderId}`); // DEBUG LOG
     await handleP2PMessage(data.senderId, data.signal, data.type);
 });
 
@@ -120,14 +121,11 @@ async function connectToPeer(targetId) {
 
     pc.onicecandidate = (event) => {
         if (event.candidate) {
-            console.log("Generated Candidate:", event.candidate.candidate); // DEBUG LOG
             if (offerSent) {
                 socket.emit('p2p_signal', { targetId: targetId, type: 'candidate', signal: event.candidate });
             } else {
                 iceQueue.push(event.candidate);
             }
-        } else {
-            console.log("End of Candidates (Host)");
         }
     };
 
@@ -135,7 +133,7 @@ async function connectToPeer(targetId) {
         console.log(`ICE State (${targetId}): ${pc.iceConnectionState}`);
         if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
             const grid = document.getElementById('fileGrid');
-            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>CHECK FIREWALL/EXTENSIONS.</div>';
+            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>CHECK FIREWALL OR TRY INCOGNITO.</div>';
         }
     };
 
@@ -160,7 +158,7 @@ async function connectToPeer(targetId) {
 // 2. Eingehende Signale verarbeiten
 async function handleP2PMessage(senderId, signal, type) {
 
-    // FALL A: ZU FRÜHE CANDIDATES
+    // FALL A: ZU FRÜHE CANDIDATES (Chrome Fix)
     if (!peers[senderId] && type === 'candidate') {
         console.log(`[Cache] Storing early candidate from ${senderId}`);
         if (!earlyCandidates[senderId]) earlyCandidates[senderId] = [];
@@ -186,7 +184,6 @@ async function handleP2PMessage(senderId, signal, type) {
 
         pc.onicecandidate = (event) => {
             if (event.candidate) {
-                console.log("Host generated candidate"); // DEBUG LOG
                 socket.emit('p2p_signal', { targetId: senderId, type: 'candidate', signal: event.candidate });
             }
         };
@@ -214,11 +211,14 @@ async function handleP2PMessage(senderId, signal, type) {
             await pc.setRemoteDescription(new RTCSessionDescription(signal));
             const answer = await pc.createAnswer();
             await pc.setLocalDescription(answer);
+
+            console.log("Sending Answer...");
             socket.emit('p2p_signal', { targetId: senderId, type: 'answer', signal: answer });
 
             processPendingQueue(p, pc);
         }
         else if (type === 'answer') {
+            console.log("Setting Remote Description (Answer)...");
             await pc.setRemoteDescription(new RTCSessionDescription(signal));
             processPendingQueue(p, pc);
         }
