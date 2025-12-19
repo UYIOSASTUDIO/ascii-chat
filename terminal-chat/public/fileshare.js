@@ -1,6 +1,6 @@
 // --- GLOBALS ---
 const socket = io();
-const earlyCandidates = {}; // Globaler Speicher für zu frühe WebRTC Pakete
+const earlyCandidates = {};
 let myHostedFiles = [];
 let currentRemoteFiles = [];
 let myRootFolderName = "ROOT";
@@ -13,10 +13,13 @@ let isZipBatchMode = false;
 
 // --- WEBRTC GLOBALS ---
 const peers = {};
-const iceServers = {
+const iceConfig = {
     iceServers: [
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:stun3.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' }
     ]
 };
 const jsonChunkBuffer = {};
@@ -65,7 +68,8 @@ renderSidebarMock();
 // --- SOCKET EVENTS ---
 socket.on('connect', () => {
     console.log("Connected to File System Network");
-    if (savedUser = localStorage.getItem('fs_username')) {
+    const savedUser = localStorage.getItem('fs_username');
+    if (savedUser) {
         socket.emit('fs_login', { username: savedUser, key: localStorage.getItem('fs_key') });
     }
     socket.emit('fs_request_update');
@@ -87,11 +91,10 @@ socket.on('p2p_signal', async (data) => {
     await handleP2PMessage(data.senderId, data.signal, data.type);
 });
 
-// --- P2P CONNECTION LOGIC (CLEAN & ROBUST) ---
+// --- P2P CONNECTION LOGIC (DEBUG VERSION) ---
 
 // 1. Verbindung starten (Als GAST / SENDER)
 async function connectToPeer(targetId) {
-    // Alte Verbindung sauber entfernen
     if (peers[targetId]) {
         console.warn(`Resetting connection to ${targetId}`);
         if(peers[targetId].connection) peers[targetId].connection.close();
@@ -101,39 +104,38 @@ async function connectToPeer(targetId) {
 
     console.log(`Starting connection to ${targetId}...`);
 
-    const pc = new RTCPeerConnection(iceServers);
+    const pc = new RTCPeerConnection(iceConfig);
 
-    // SENDER LOCK: Candidates erst senden, wenn Offer weg ist
     let iceQueue = [];
     let offerSent = false;
 
-    // Data Channel erstellen
     const channel = pc.createDataChannel("fileSystem");
     setupChannelHandlers(channel, targetId);
 
-    // Speichern
     peers[targetId] = {
         connection: pc,
         channel: channel,
-        pendingQueue: [] // Queue für eingehende Candidates
+        pendingQueue: []
     };
 
     pc.onicecandidate = (event) => {
         if (event.candidate) {
+            console.log("Generated Candidate:", event.candidate.candidate); // DEBUG LOG
             if (offerSent) {
                 socket.emit('p2p_signal', { targetId: targetId, type: 'candidate', signal: event.candidate });
             } else {
-                // Buffer für später (Chrome Fix Teil 1)
                 iceQueue.push(event.candidate);
             }
+        } else {
+            console.log("End of Candidates (Host)");
         }
     };
 
     pc.oniceconnectionstatechange = () => {
         console.log(`ICE State (${targetId}): ${pc.iceConnectionState}`);
-        if (pc.iceConnectionState === 'failed') {
+        if (pc.iceConnectionState === 'failed' || pc.iceConnectionState === 'disconnected') {
             const grid = document.getElementById('fileGrid');
-            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>RETRYING...</div>';
+            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>CHECK FIREWALL/EXTENSIONS.</div>';
         }
     };
 
@@ -141,13 +143,12 @@ async function connectToPeer(targetId) {
         const offer = await pc.createOffer();
         await pc.setLocalDescription(offer);
 
-        // Erst Offer senden
         console.log("Sending Offer...");
         socket.emit('p2p_signal', { targetId: targetId, type: 'offer', signal: offer });
         offerSent = true;
 
-        // Dann Candidates flushen
         if (iceQueue.length > 0) {
+            console.log(`Flushing ${iceQueue.length} buffered candidates.`);
             iceQueue.forEach(c => socket.emit('p2p_signal', { targetId: targetId, type: 'candidate', signal: c }));
         }
 
@@ -156,10 +157,10 @@ async function connectToPeer(targetId) {
     }
 }
 
-// 2. Eingehende Signale verarbeiten (Als HOST oder GAST)
+// 2. Eingehende Signale verarbeiten
 async function handleP2PMessage(senderId, signal, type) {
 
-    // --- FALL A: ZU FRÜHE CANDIDATES (Chrome Fix Teil 2) ---
+    // FALL A: ZU FRÜHE CANDIDATES
     if (!peers[senderId] && type === 'candidate') {
         console.log(`[Cache] Storing early candidate from ${senderId}`);
         if (!earlyCandidates[senderId]) earlyCandidates[senderId] = [];
@@ -167,14 +168,14 @@ async function handleP2PMessage(senderId, signal, type) {
         return;
     }
 
-    // --- FALL B: NEUES ANGEBOT (OFFER) ---
+    // FALL B: NEUES ANGEBOT (OFFER)
     if (type === 'offer') {
         if (peers[senderId]) {
             if(peers[senderId].connection) peers[senderId].connection.close();
             delete peers[senderId];
         }
 
-        const pc = new RTCPeerConnection(iceServers);
+        const pc = new RTCPeerConnection(iceConfig);
 
         pc.ondatachannel = (event) => {
             console.log("Host: Data Channel received!");
@@ -185,6 +186,7 @@ async function handleP2PMessage(senderId, signal, type) {
 
         pc.onicecandidate = (event) => {
             if (event.candidate) {
+                console.log("Host generated candidate"); // DEBUG LOG
                 socket.emit('p2p_signal', { targetId: senderId, type: 'candidate', signal: event.candidate });
             }
         };
@@ -195,7 +197,6 @@ async function handleP2PMessage(senderId, signal, type) {
             pendingQueue: []
         };
 
-        // Frühe Candidates wiederherstellen
         if (earlyCandidates[senderId]) {
             console.log(`[Cache] Found ${earlyCandidates[senderId].length} early candidates.`);
             peers[senderId].pendingQueue.push(...earlyCandidates[senderId]);
@@ -222,11 +223,10 @@ async function handleP2PMessage(senderId, signal, type) {
             processPendingQueue(p, pc);
         }
         else if (type === 'candidate') {
-            // Wenn RemoteDesc fehlt -> Queue
             if (!pc.remoteDescription || pc.remoteDescription.type === null) {
                 p.pendingQueue.push(signal);
             } else {
-                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => {});
+                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => console.warn("Candidate Error:", e));
             }
         }
     } catch (e) {
@@ -259,7 +259,6 @@ function setupChannelHandlers(channel, peerId) {
             const msg = JSON.parse(event.data);
             handleChannelMessage(msg, peerId, channel);
         } catch (e) {
-            // Chunk logic or error
             if (event.data.includes('JSON_CHUNK')) {
                 const chunkMsg = JSON.parse(event.data);
                 handleChannelMessage(chunkMsg, peerId, channel);
@@ -278,7 +277,6 @@ function setupChannelHandlers(channel, peerId) {
 
 function handleChannelMessage(msg, peerId, channel) {
 
-    // JSON Chunk Handling
     if (msg.type === 'JSON_CHUNK') {
         if (!jsonChunkBuffer[peerId]) jsonChunkBuffer[peerId] = '';
         jsonChunkBuffer[peerId] += msg.data;
@@ -290,7 +288,6 @@ function handleChannelMessage(msg, peerId, channel) {
         return;
     }
 
-    // --- HOST LOGIK ---
     if (msg.type === 'REQUEST_ROOT') {
         const rootItems = getItemsInPath(myHostedFiles, myRootFolderName);
         sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: rootItems, path: myRootFolderName });
@@ -323,7 +320,6 @@ function handleChannelMessage(msg, peerId, channel) {
         sendLargeJSON(channel, 'RESPONSE_RECURSIVE_LIST', { list: metaList });
     }
 
-    // --- CLIENT LOGIK ---
     if (msg.type === 'RESPONSE_DIRECTORY') {
         currentPathStr = msg.payload.path;
         const crumbs = currentPathStr.split('/');
@@ -448,7 +444,7 @@ function renderSidebar(shares) {
 function renderLocalGrid(items) {
     const grid = document.getElementById('fileGrid');
     grid.innerHTML = '';
-    document.getElementById('folderActions').style.display = 'none'; // Host sees no zip btn
+    document.getElementById('folderActions').style.display = 'none';
 
     if (currentPathStr && currentPathStr !== myRootFolderName) {
         addBackButton(grid, () => {
@@ -485,7 +481,6 @@ function renderRemoteGrid(items, peerId) {
     const grid = document.getElementById('fileGrid');
     grid.innerHTML = '';
 
-    // ZIP Button
     const actionArea = document.getElementById('folderActions');
     const zipBtn = document.getElementById('btnZipDownload');
     actionArea.style.display = 'block';
