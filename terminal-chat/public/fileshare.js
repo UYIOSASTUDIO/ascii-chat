@@ -685,8 +685,59 @@ function streamFileToPeer(f,c){
 }
 function arrayBufferToBase64(b){ let binary=''; const bytes=new Uint8Array(b); for(let i=0;i<bytes.byteLength;i++)binary+=String.fromCharCode(bytes[i]); return window.btoa(binary); }
 function base64ToArrayBuffer(b){ const s=window.atob(b); const y=new Uint8Array(s.length); for(let i=0;i<s.length;i++)y[i]=s.charCodeAt(i); return y.buffer; }
-function renderRemoteBlob(b,n){ const u=URL.createObjectURL(b); document.getElementById('previewContent').innerHTML=`<a href="${u}" download="${n}" style="color:#0f0">Download ${n}</a>`; }
-function triggerBrowserDownload(b,n){ const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download=n; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
+// Zeigt Remote-Dateien (Blobs) an, statt nur einen Link zu geben
+function renderRemoteBlob(blob, filename) {
+    const contentDiv = document.getElementById('previewContent');
+    contentDiv.innerHTML = ''; // Lade-Text entfernen
+
+    // 1. Prüfen auf Bild-Endungen
+    const isImage = filename.match(/\.(jpeg|jpg|gif|png|webp|bmp|svg)$/i);
+
+    if (isImage) {
+        // BILD ANZEIGEN
+        const url = URL.createObjectURL(blob);
+        const img = document.createElement('img');
+        img.src = url;
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = '600px'; // Damit es nicht den Screen sprengt
+        img.style.border = '1px solid #0f0';
+        contentDiv.appendChild(img);
+    }
+    else {
+        // TEXT / CODE ANZEIGEN
+        // Sicherheits-Check: Keine riesigen Dateien (> 2MB) als Text rendern, das friert den Browser ein
+        if (blob.size > 2 * 1024 * 1024) {
+            contentDiv.innerHTML = `
+                <div style="color:orange; text-align:center; margin-top:20%;">
+                    [ FILE TOO LARGE FOR PREVIEW ]<br>
+                    Please use the [ SAVE TO DISK ] button above.
+                </div>`;
+            return;
+        }
+
+        const reader = new FileReader();
+
+        reader.onload = (e) => {
+            // Wir packen den Text in ein <pre> Tag, damit Formatierung erhalten bleibt
+            const pre = document.createElement('pre');
+            pre.style.whiteSpace = 'pre-wrap';       // Zeilenumbruch
+            pre.style.wordBreak = 'break-word';      // Lange Wörter brechen
+            pre.style.textAlign = 'left';
+            pre.style.fontFamily = "'Courier New', monospace";
+            pre.style.margin = '10px';
+            pre.textContent = e.target.result;       // Sicherer als innerHTML (verhindert XSS)
+
+            contentDiv.appendChild(pre);
+        };
+
+        reader.onerror = () => {
+            contentDiv.innerHTML = '<div style="color:red">Error reading file content.</div>';
+        };
+
+        // Versuchen als Text zu lesen
+        reader.readAsText(blob);
+    }
+}function triggerBrowserDownload(b,n){ const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download=n; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
 function requestFileList(tid){ if(peers[tid]?.channel?.readyState==='open') peers[tid].channel.send(JSON.stringify({type:'REQUEST_ROOT'})); }
 function navigateRemote(p,tid){ if(peers[tid]?.channel) peers[tid].channel.send(JSON.stringify({type:'REQUEST_DIRECTORY',path:p})); }
 function requestFileFromPeer(n,tid){ incomingFileBuffer=[]; if(peers[tid]?.channel) peers[tid].channel.send(JSON.stringify({type:'REQUEST_DOWNLOAD',filename:n})); }
