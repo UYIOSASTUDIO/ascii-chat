@@ -1,6 +1,6 @@
 // --- GLOBALS ---
 const socket = io();
-const earlyCandidates = {};
+const earlyCandidates = {}; // WICHTIG: Cache für zu schnelle Chrome-Pakete
 let myHostedFiles = [];
 let currentRemoteFiles = [];
 let myRootFolderName = "ROOT";
@@ -11,13 +11,14 @@ let currentPathStr = "";
 let currentActivePeerId = null;
 let isZipBatchMode = false;
 
-// --- WEBRTC GLOBALS ---
+// --- WEBRTC CONFIG (PRODUCTION READY) ---
 const peers = {};
 const iceConfig = {
     iceServers: [
-        // Wir nutzen nur die zwei zuverlässigsten Google Server
         { urls: 'stun:stun.l.google.com:19302' },
-        { urls: 'stun:stun1.l.google.com:19302' }
+        { urls: 'stun:stun1.l.google.com:19302' },
+        { urls: 'stun:stun2.l.google.com:19302' },
+        { urls: 'stun:global.stun.twilio.com:3478' }
     ]
 };
 const jsonChunkBuffer = {};
@@ -57,24 +58,25 @@ socket.on('fs_update_shares', (sharesList) => {
         closePreview();
         document.getElementById('fileGrid').innerHTML = '<div class="empty-state" style="color:red;">&lt; HOST DISCONNECTED &gt;</div>';
         currentActivePeerId = null;
+        updateBreadcrumbs(['ROOT']);
     }
     renderSidebar(sharesList);
 });
 
 socket.on('p2p_signal', async (data) => {
-    // Logge eingehende Signale, um zu sehen, ob eine IP dabei ist
-    if(data.type === 'candidate') {
-        console.log(`[SIGNAL] Received CANDIDATE from ${data.senderId}:`, data.signal.candidate);
-    } else {
-        console.log(`[SIGNAL] Received ${data.type.toUpperCase()} from ${data.senderId}`);
-    }
+    // Debugging Logs
+    if (data.type === 'offer') console.log(`[SIGNAL] Received OFFER from ${data.senderId}`);
+    if (data.type === 'answer') console.log(`[SIGNAL] Received ANSWER from ${data.senderId}`);
+    if (data.type === 'candidate') console.log(`[SIGNAL] Received CANDIDATE from ${data.senderId}`);
+
     await handleP2PMessage(data.senderId, data.signal, data.type);
 });
 
-// --- P2P CONNECTION LOGIC (RELAXED VERSION) ---
+// --- P2P CONNECTION LOGIC (FINAL UNIVERSAL FIX) ---
 
 // 1. Verbindung starten
 async function connectToPeer(targetId) {
+    // Reset, falls Verbindung schon existiert
     if (peers[targetId]) {
         if(peers[targetId].connection) peers[targetId].connection.close();
         if(peers[targetId].channel) peers[targetId].channel.close();
@@ -101,6 +103,7 @@ async function connectToPeer(targetId) {
             if (offerSent) {
                 socket.emit('p2p_signal', { targetId: targetId, type: 'candidate', signal: event.candidate });
             } else {
+                // Buffer, um Race-Conditions zu vermeiden
                 iceQueue.push(event.candidate);
             }
         }
@@ -110,11 +113,12 @@ async function connectToPeer(targetId) {
         const state = pc.iceConnectionState;
         console.log(`ICE State (${targetId}): ${state}`);
 
-        // RELAXED FIX: Wir ignorieren 'disconnected', da es sich oft erholt.
-        // Wir reagieren nur auf 'failed'.
+        if (state === 'connected') {
+            console.log("P2P UPLINK ESTABLISHED! 🚀");
+        }
         if (state === 'failed') {
             const grid = document.getElementById('fileGrid');
-            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>Network blocked P2P. Try using a Hotspot.</div>';
+            if(grid) grid.innerHTML = '<div style="color:red; margin-top:50px; text-align:center;">CONNECTION FAILED.<br>FIREWALL BLOCKED P2P.</div>';
         }
     };
 
@@ -126,6 +130,7 @@ async function connectToPeer(targetId) {
         socket.emit('p2p_signal', { targetId: targetId, type: 'offer', signal: offer });
         offerSent = true;
 
+        // Jetzt die gebufferten Candidates senden
         if (iceQueue.length > 0) {
             iceQueue.forEach(c => socket.emit('p2p_signal', { targetId: targetId, type: 'candidate', signal: c }));
         }
@@ -137,14 +142,16 @@ async function connectToPeer(targetId) {
 
 // 2. Signale verarbeiten
 async function handleP2PMessage(senderId, signal, type) {
-    // A: Frühe Candidates
+
+    // FALL A: ZU FRÜHE CANDIDATES (Chrome Cache Fix)
     if (!peers[senderId] && type === 'candidate') {
+        console.log(`[Cache] Storing early candidate from ${senderId}`);
         if (!earlyCandidates[senderId]) earlyCandidates[senderId] = [];
         earlyCandidates[senderId].push(signal);
         return;
     }
 
-    // B: Offer (Neue Verbindung)
+    // FALL B: OFFER (Neue Verbindung)
     if (type === 'offer') {
         if (peers[senderId]) {
             if(peers[senderId].connection) peers[senderId].connection.close();
@@ -168,7 +175,9 @@ async function handleP2PMessage(senderId, signal, type) {
 
         peers[senderId] = { connection: pc, channel: null, pendingQueue: [] };
 
+        // Haben wir schon Candidates im Cache?
         if (earlyCandidates[senderId]) {
+            console.log(`[Cache] Restoring ${earlyCandidates[senderId].length} candidates.`);
             peers[senderId].pendingQueue.push(...earlyCandidates[senderId]);
             delete earlyCandidates[senderId];
         }
@@ -192,10 +201,11 @@ async function handleP2PMessage(senderId, signal, type) {
             processPendingQueue(p, pc);
         }
         else if (type === 'candidate') {
+            // Wenn RemoteDesc noch nicht da ist -> Queue
             if (!pc.remoteDescription || pc.remoteDescription.type === null) {
                 p.pendingQueue.push(signal);
             } else {
-                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => console.warn("ICE Error:", e));
+                await pc.addIceCandidate(new RTCIceCandidate(signal)).catch(e => {});
             }
         }
     } catch (e) { console.error("WebRTC Logic Error:", e); }
@@ -214,7 +224,6 @@ async function processPendingQueue(peerObj, pc) {
 function setupChannelHandlers(channel, peerId) {
     channel.onopen = () => {
         console.log(`CHANNEL OPENED with ${peerId}`);
-        // Wenn Kanal offen ist, sofort Liste anfordern!
         channel.send(JSON.stringify({ type: 'REQUEST_ROOT' }));
     };
 
