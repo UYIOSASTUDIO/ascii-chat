@@ -15,6 +15,7 @@ let isZipBatchMode = false;
 // Variables for Mounting & Passwords
 let pendingFiles = null;
 let targetPeerForPassword = null;
+const knownPasswords = {}; // NEU: Speichert Passwörter für diese Session
 
 // --- WEBRTC CONFIG ---
 const peers = {};
@@ -81,7 +82,6 @@ function closeMountModal() {
     pendingFiles = null;
 }
 
-// Hidden Input Change Listener
 const hiddenInput = document.getElementById('hiddenFolderInput');
 if(hiddenInput) {
     hiddenInput.addEventListener('change', (e) => {
@@ -108,13 +108,10 @@ function confirmMount() {
     const password = document.getElementById('mountPassword').value;
     const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-    // GLOBALS SETZEN
     myHostedFiles = pendingFiles;
     myRootFolderName = customName;
     myRealRootName = pendingFiles[0].webkitRelativePath.split('/')[0];
     myMountPassword = password || null;
-
-    console.log(`[MOUNT] Virtual: "${myRootFolderName}" -> Real: "${myRealRootName}"`);
 
     closeMountModal();
 
@@ -153,8 +150,13 @@ function closePasswordModal() {
 function submitPassword() {
     const pw = document.getElementById('accessPassword').value;
     if(!pw) return;
+
     const peerId = targetPeerForPassword;
     closePasswordModal();
+
+    // NEU: Passwort für die Zukunft speichern
+    knownPasswords[peerId] = pw;
+
     initiateConnectionWithPassword(peerId, pw);
 }
 
@@ -187,21 +189,26 @@ function renderSidebar(shares) {
             li.classList.add('active');
 
             if (isMe) {
-                // LOCAL
                 document.getElementById('filePreview').style.display = 'none';
                 document.getElementById('fileGrid').style.display = 'grid';
                 currentActivePeerId = socketId;
 
                 currentPathStr = item.folderName;
-                const items = getMappedLocalItems(currentPathStr);
-                renderLocalGrid(items);
+                renderLocalGrid(getMappedLocalItems(currentPathStr));
                 updateBreadcrumbs(['ROOT', item.folderName]);
             } else {
-                // REMOTE
+                // REMOTE LOGIK
                 if (item.isProtected) {
-                    targetPeerForPassword = socketId;
-                    document.getElementById('passwordModal').style.display = 'flex';
-                    document.getElementById('accessPassword').focus();
+                    // NEU: Haben wir das Passwort schon?
+                    if (knownPasswords[socketId]) {
+                        // Ja -> Direkt verbinden ohne Popup
+                        initiateConnectionWithPassword(socketId, knownPasswords[socketId]);
+                    } else {
+                        // Nein -> Popup zeigen
+                        targetPeerForPassword = socketId;
+                        document.getElementById('passwordModal').style.display = 'flex';
+                        document.getElementById('accessPassword').focus();
+                    }
                 } else {
                     initiateConnectionWithPassword(socketId, null);
                 }
@@ -214,11 +221,36 @@ function renderSidebar(shares) {
 function initiateConnectionWithPassword(peerId, password) {
     document.getElementById('filePreview').style.display = 'none';
     document.getElementById('fileGrid').style.display = 'grid';
-    document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING...<br>(Establishing secure P2P Tunnel)</div>';
     currentActivePeerId = peerId;
 
-    // FIX: Passwort direkt übergeben!
-    connectToPeer(peerId, password);
+    // Speichern, falls es direkt über Sidebar kam
+    if(password) knownPasswords[peerId] = password;
+
+    // WICHTIG: Das Passwort holen (entweder frisch eingegeben oder gespeichert)
+    const finalPassword = password || knownPasswords[peerId];
+
+    // FIX FÜR HÄNGENBLEIBEN: Ist die Verbindung schon offen?
+    const p = peers[peerId];
+    if (p && p.channel && p.channel.readyState === 'open') {
+        console.log("Connection already established. Reusing channel.");
+        document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">LOADING DIRECTORY...</div>';
+
+        // Einfach Anfrage senden, statt neu zu verbinden!
+        p.channel.send(JSON.stringify({
+            type: 'REQUEST_ROOT',
+            password: finalPassword
+        }));
+        return;
+    }
+
+    // Wenn nicht verbunden, dann neu verbinden
+    document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING...<br>(Establishing secure P2P Tunnel)</div>';
+
+    // Peer Objekt vorbereiten für Handshake
+    if(!peers[peerId]) peers[peerId] = {};
+    peers[peerId].authPassword = finalPassword;
+
+    connectToPeer(peerId, finalPassword);
 }
 
 function renderLocalGrid(items) {
@@ -357,7 +389,6 @@ function updateBreadcrumbs(pathArray) {
 
     pathArray.forEach((crumb, index) => {
         if (index > 0) accumulatedPath = accumulatedPath ? `${accumulatedPath}/${crumb}` : crumb;
-
         const pathToThisCrumb = accumulatedPath;
 
         const span = document.createElement('span');
@@ -373,7 +404,6 @@ function updateBreadcrumbs(pathArray) {
                 incomingFileBuffer = [];
 
                 if (index === 0) {
-                    // ROOT
                     if (currentActivePeerId && currentActivePeerId !== socket.id) {
                         navigateRemote("", currentActivePeerId);
                     } else {
@@ -382,7 +412,6 @@ function updateBreadcrumbs(pathArray) {
                         updateBreadcrumbs(['ROOT', myRootFolderName]);
                     }
                 } else {
-                    // FOLDER
                     if (currentActivePeerId && currentActivePeerId !== socket.id) {
                         navigateRemote(pathToThisCrumb, currentActivePeerId);
                     } else {
@@ -411,7 +440,7 @@ function closePreview() {
     updateBreadcrumbs(['ROOT', ...parts]);
 }
 
-// --- HELPER: PATH MAPPING ---
+// --- HELPERS ---
 
 function mapVirtualToReal(virtualPath) {
     if (!virtualPath) return "";
@@ -431,20 +460,53 @@ function mapRealToVirtual(realPath) {
 
 function getMappedLocalItems(virtualPath) {
     const realSearchPath = mapVirtualToReal(virtualPath);
-    console.log(`[DEBUG] Mapping: "${virtualPath}" -> "${realSearchPath}"`); // DEBUG LOG
-
     const rawItems = getItemsInPath(myHostedFiles, realSearchPath);
-    console.log(`[DEBUG] Found ${rawItems.length} items.`); // DEBUG LOG
-
     return rawItems.map(item => {
         return { ...item, fullPath: mapRealToVirtual(item.fullPath) };
     });
 }
 
+function renderRemoteBlob(blob, filename) {
+    const contentDiv = document.getElementById('previewContent');
+    contentDiv.innerHTML = '';
+
+    const isImage = filename.match(/\.(jpeg|jpg|gif|png|webp|bmp|svg)$/i);
+
+    if (isImage) {
+        const url = URL.createObjectURL(blob);
+        const img = document.createElement('img');
+        img.src = url;
+        img.style.maxWidth = '100%';
+        img.style.maxHeight = '600px';
+        img.style.border = '1px solid #0f0';
+        contentDiv.appendChild(img);
+    }
+    else {
+        if (blob.size > 2 * 1024 * 1024) {
+            contentDiv.innerHTML = `<div style="color:orange; text-align:center; margin-top:20%;">[ FILE TOO LARGE FOR PREVIEW ]<br>Please use the [ SAVE TO DISK ] button above.</div>`;
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            const pre = document.createElement('pre');
+            pre.style.whiteSpace = 'pre-wrap';
+            pre.style.wordBreak = 'break-word';
+            pre.style.textAlign = 'left';
+            pre.style.fontFamily = "'Courier New', monospace";
+            pre.style.margin = '10px';
+            pre.textContent = e.target.result;
+            contentDiv.appendChild(pre);
+        };
+        reader.onerror = () => { contentDiv.innerHTML = '<div style="color:red">Error reading file content.</div>'; };
+        reader.readAsText(blob);
+    }
+}
+
 // --- P2P CONNECTION LOGIC ---
 
-// FIX: password parameter added
 async function connectToPeer(targetId, password = null) {
+    // Zombie Killer nur, wenn wir nicht wiederverwenden
     if (peers[targetId]) {
         if(peers[targetId].connection) peers[targetId].connection.close();
         delete peers[targetId];
@@ -456,7 +518,6 @@ async function connectToPeer(targetId, password = null) {
     let iceQueue = [];
     let offerSent = false;
 
-    // FIX: password passed to handlers
     setupChannelHandlers(channel, targetId, password);
 
     peers[targetId] = { connection: pc, channel: channel, pendingQueue: [] };
@@ -491,7 +552,6 @@ async function handleP2PMessage(senderId, signal, type) {
         const pc = new RTCPeerConnection(iceConfig);
         pc.ondatachannel = (event) => {
             const channel = event.channel;
-            // Host braucht kein Passwort zum Antworten, aber wir lassen die Funktion generisch
             setupChannelHandlers(channel, senderId, null);
             if(peers[senderId]) peers[senderId].channel = channel;
         };
@@ -536,11 +596,10 @@ async function processPendingQueue(peerObj, pc) {
     }
 }
 
-// FIX: password parameter added
 function setupChannelHandlers(channel, peerId, password) {
     channel.onopen = () => {
         console.log(`CHANNEL OPENED with ${peerId}`);
-        // WICHTIG: Passwort mitsenden!
+        // WICHTIG: Password senden
         channel.send(JSON.stringify({ type: 'REQUEST_ROOT', password: password }));
     };
     channel.onmessage = (event) => {
@@ -622,6 +681,13 @@ function handleChannelMessage(msg, peerId, channel) {
         processZipQueue();
     }
     if (msg.type === 'ERROR') {
+        // NEU: Wenn Passwort falsch war, müssen wir es löschen, damit User neu eingeben kann
+        if (msg.message.includes('PASSWORD')) {
+            delete knownPasswords[peerId]; // Passwort vergessen
+            document.getElementById('fileGrid').innerHTML = `<div class="empty-state" style="color:red;">ACCESS DENIED: WRONG PASSWORD<br>Try again.</div>`;
+            return;
+        }
+
         if(isZipBatchMode) processZipQueue();
         else if (isPreviewMode) document.getElementById('previewContent').innerHTML = `<div style="color:red;margin-top:20%;text-align:center">${msg.message}</div>`;
         else {
@@ -650,7 +716,7 @@ function handleChannelMessage(msg, peerId, channel) {
     }
 }
 
-// --- HELPERS ---
+// --- HELPER FUNCTIONS ---
 function createGridItem(i){
     const d=document.createElement('div'); d.className='file-icon';
     d.innerHTML=`<div class="icon-img">${i.type==='folder'?'[DIR]':'[FILE]'}</div><div class="file-label">${i.name}</div>`;
@@ -685,59 +751,7 @@ function streamFileToPeer(f,c){
 }
 function arrayBufferToBase64(b){ let binary=''; const bytes=new Uint8Array(b); for(let i=0;i<bytes.byteLength;i++)binary+=String.fromCharCode(bytes[i]); return window.btoa(binary); }
 function base64ToArrayBuffer(b){ const s=window.atob(b); const y=new Uint8Array(s.length); for(let i=0;i<s.length;i++)y[i]=s.charCodeAt(i); return y.buffer; }
-// Zeigt Remote-Dateien (Blobs) an, statt nur einen Link zu geben
-function renderRemoteBlob(blob, filename) {
-    const contentDiv = document.getElementById('previewContent');
-    contentDiv.innerHTML = ''; // Lade-Text entfernen
-
-    // 1. Prüfen auf Bild-Endungen
-    const isImage = filename.match(/\.(jpeg|jpg|gif|png|webp|bmp|svg)$/i);
-
-    if (isImage) {
-        // BILD ANZEIGEN
-        const url = URL.createObjectURL(blob);
-        const img = document.createElement('img');
-        img.src = url;
-        img.style.maxWidth = '100%';
-        img.style.maxHeight = '600px'; // Damit es nicht den Screen sprengt
-        img.style.border = '1px solid #0f0';
-        contentDiv.appendChild(img);
-    }
-    else {
-        // TEXT / CODE ANZEIGEN
-        // Sicherheits-Check: Keine riesigen Dateien (> 2MB) als Text rendern, das friert den Browser ein
-        if (blob.size > 2 * 1024 * 1024) {
-            contentDiv.innerHTML = `
-                <div style="color:orange; text-align:center; margin-top:20%;">
-                    [ FILE TOO LARGE FOR PREVIEW ]<br>
-                    Please use the [ SAVE TO DISK ] button above.
-                </div>`;
-            return;
-        }
-
-        const reader = new FileReader();
-
-        reader.onload = (e) => {
-            // Wir packen den Text in ein <pre> Tag, damit Formatierung erhalten bleibt
-            const pre = document.createElement('pre');
-            pre.style.whiteSpace = 'pre-wrap';       // Zeilenumbruch
-            pre.style.wordBreak = 'break-word';      // Lange Wörter brechen
-            pre.style.textAlign = 'left';
-            pre.style.fontFamily = "'Courier New', monospace";
-            pre.style.margin = '10px';
-            pre.textContent = e.target.result;       // Sicherer als innerHTML (verhindert XSS)
-
-            contentDiv.appendChild(pre);
-        };
-
-        reader.onerror = () => {
-            contentDiv.innerHTML = '<div style="color:red">Error reading file content.</div>';
-        };
-
-        // Versuchen als Text zu lesen
-        reader.readAsText(blob);
-    }
-}function triggerBrowserDownload(b,n){ const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download=n; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
+function triggerBrowserDownload(b,n){ const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download=n; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
 function requestFileList(tid){ if(peers[tid]?.channel?.readyState==='open') peers[tid].channel.send(JSON.stringify({type:'REQUEST_ROOT'})); }
 function navigateRemote(p,tid){ if(peers[tid]?.channel) peers[tid].channel.send(JSON.stringify({type:'REQUEST_DIRECTORY',path:p})); }
 function requestFileFromPeer(n,tid){ incomingFileBuffer=[]; if(peers[tid]?.channel) peers[tid].channel.send(JSON.stringify({type:'REQUEST_DOWNLOAD',filename:n})); }
