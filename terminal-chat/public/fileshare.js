@@ -17,6 +17,8 @@ let pendingFiles = null;
 let targetPeerForPassword = null;
 const knownPasswords = {}; // NEU: Speichert Passwörter für diese Session
 
+let latestSharesList = {};
+
 // --- WEBRTC CONFIG ---
 const peers = {};
 const iceConfig = {
@@ -53,13 +55,24 @@ socket.on('connect', () => {
 });
 
 socket.on('fs_update_shares', (sharesList) => {
+    // 1. Daten global speichern
+    latestSharesList = sharesList;
+
+    // 2. Sicherheits-Check (wie vorher)
     if (currentActivePeerId && !sharesList[currentActivePeerId]) {
         closePreview();
         document.getElementById('fileGrid').innerHTML = '<div class="empty-state" style="color:red;">&lt; HOST DISCONNECTED &gt;</div>';
         currentActivePeerId = null;
         updateBreadcrumbs(['ROOT']);
     }
-    renderSidebar(sharesList);
+
+    // 3. Rendern (nutzt jetzt die globale Liste + Suchfilter)
+    renderSidebar();
+});
+
+// NEU: Event Listener für die Suche
+document.getElementById('driveSearch').addEventListener('input', () => {
+    renderSidebar(); // Neu rendern bei jedem Tastendruck
 });
 
 socket.on('p2p_signal', async (data) => {
@@ -158,6 +171,7 @@ function confirmMount() {
 
     socket.emit('fs_start_hosting', {
         folderName: customName,
+        username: user,
         allowedUsers: allowedUsers,
         isProtected: !!password
     });
@@ -198,49 +212,70 @@ function submitPassword() {
 
 // --- UI LOGIC ---
 
-function renderSidebar(shares) {
+function renderSidebar() {
     const list = document.getElementById('shareList');
     list.innerHTML = '';
-    const shareIds = Object.keys(shares);
 
-    if (shareIds.length === 0) {
-        list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No active drives.</li>';
+    const searchTerm = document.getElementById('driveSearch').value.toLowerCase();
+    const allIds = Object.keys(latestSharesList);
+
+    // FILTER LOGIK: FolderName ODER Username ODER ID muss passen
+    const filteredIds = allIds.filter(id => {
+        const item = latestSharesList[id];
+        return item.folderName.toLowerCase().includes(searchTerm) ||
+            item.username.toLowerCase().includes(searchTerm) ||
+            id.toLowerCase().includes(searchTerm);
+    });
+
+    if (filteredIds.length === 0) {
+        if(allIds.length === 0) {
+            list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No active drives.</li>';
+        } else {
+            list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No matches found.</li>';
+        }
         return;
     }
 
-    shareIds.forEach(socketId => {
-        const item = shares[socketId];
+    filteredIds.forEach(socketId => {
+        const item = latestSharesList[socketId];
         const isMe = (socketId === socket.id);
         const isLocked = item.isProtected && !isMe;
 
         const li = document.createElement('li');
         li.className = 'share-item';
+        // Wenn dieser Eintrag gerade aktiv ist, highlighten
+        if (socketId === currentActivePeerId) li.classList.add('active');
         if(isMe) li.style.cssText = 'color:#0f0; border-left:4px solid #0f0;';
 
         const lockIcon = isLocked ? '🔒 ' : '';
-        li.innerHTML = `<span class="share-name">${lockIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span><span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username}</span>`;
+        // Zeige auch die ID klein an, damit man weiß wonach man gesucht hat
+        const idDisplay = `<span style="font-size:0.7em; color:#444;">[ID: ${socketId.substr(0,5)}]</span>`;
+
+        li.innerHTML = `
+            <span class="share-name">${lockIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span>
+            <span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username} ${idDisplay}</span>
+        `;
 
         li.onclick = () => {
             document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
             li.classList.add('active');
 
             if (isMe) {
+                // LOCAL
                 document.getElementById('filePreview').style.display = 'none';
                 document.getElementById('fileGrid').style.display = 'grid';
                 currentActivePeerId = socketId;
 
                 currentPathStr = item.folderName;
-                renderLocalGrid(getMappedLocalItems(currentPathStr));
+                const items = getMappedLocalItems(currentPathStr);
+                renderLocalGrid(items);
                 updateBreadcrumbs(['ROOT', item.folderName]);
             } else {
-                // REMOTE LOGIK
+                // REMOTE
                 if (item.isProtected) {
-                    // NEU: Haben wir das Passwort schon?
                     if (knownPasswords[socketId]) {
-                        // Ja -> Direkt verbinden ohne Popup
                         initiateConnectionWithPassword(socketId, knownPasswords[socketId]);
                     } else {
-                        // Nein -> Popup zeigen
                         targetPeerForPassword = socketId;
                         document.getElementById('passwordModal').style.display = 'flex';
                         document.getElementById('accessPassword').focus();

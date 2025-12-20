@@ -164,6 +164,11 @@ io.on('connection', (socket) => {
         };
 
         console.log(`FS-CLIENT registriert: ${data.username} (${socket.id})`);
+
+        if (activeShares[socket.id]) {
+            activeShares[socket.id].username = socket.username;
+            broadcastShares(); // Update an alle schicken
+        }
     });
 
     // 5. P2P SIGNALING (Die Telefonvermittlung)
@@ -2547,12 +2552,13 @@ io.on('connection', (socket) => {
 
     // 1. User kündigt Share an
     socket.on('fs_start_hosting', (data) => {
-        // data enthält jetzt: folderName, allowedUsers (array), isProtected (bool)
         activeShares[socket.id] = {
-            username: socket.username || 'Unknown', // Falls du Username im Socket speicherst
+            // WICHTIG: Wir nehmen den Namen aus dem Paket (data.username),
+            // falls er da ist. Sonst Fallback auf Socket oder Anonymous.
+            username: data.username || socket.username || 'Anonymous',
             key: socket.id.substr(0, 5),
             folderName: data.folderName,
-            allowedUsers: data.allowedUsers || [], // Array von Socket-IDs oder leer für alle
+            allowedUsers: data.allowedUsers || [],
             isProtected: data.isProtected || false
         };
         broadcastShares();

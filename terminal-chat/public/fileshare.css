@@ -288,3 +288,28 @@ header {
     font-family: 'Courier New', monospace;
 }
 .modal-actions { display: flex; justify-content: space-between; margin-top: 10px; }
+
+/* SEARCH BAR STYLING */
+#driveSearch {
+    width: 90%;
+    margin: 0 auto 15px auto;
+    display: block;
+    background: #000;
+    border: 1px solid #333;
+    border-bottom: 1px solid #0f0;
+    color: #0f0;
+    padding: 8px;
+    font-family: 'Courier New', monospace;
+    font-size: 14px;
+    outline: none;
+    transition: all 0.3s ease;
+}
+
+#driveSearch:focus {
+    background: #0a0a0a;
+    box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
+}
+
+#driveSearch::placeholder {
+    color: #005500;
+}
