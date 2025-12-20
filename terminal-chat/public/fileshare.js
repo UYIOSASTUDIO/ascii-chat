@@ -344,43 +344,6 @@ function unmountDrive() {
     socket.emit('fs_stop_hosting');
 }
 
-function renderSidebar(shares) {
-    const list = document.getElementById('shareList');
-    list.innerHTML = '';
-    const shareIds = Object.keys(shares);
-    if (shareIds.length === 0) {
-        list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No active drives.</li>';
-        return;
-    }
-    shareIds.forEach(socketId => {
-        const item = shares[socketId];
-        const isMe = (socketId === socket.id);
-        const li = document.createElement('li');
-        li.className = 'share-item';
-        if(isMe) li.style.cssText = 'color:#0f0; border-left:4px solid #0f0;';
-
-        li.onclick = () => {
-            document.getElementById('filePreview').style.display = 'none';
-            document.getElementById('fileGrid').style.display = 'grid';
-            incomingFileBuffer = [];
-            currentActivePeerId = socketId;
-            document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
-            li.classList.add('active');
-
-            if(isMe) {
-                currentPathStr = item.folderName;
-                renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
-                updateBreadcrumbs([item.folderName]);
-            } else {
-                document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">ESTABLISHING P2P UPLINK...</div>';
-                connectToPeer(socketId);
-            }
-        };
-        li.innerHTML = `<span class="share-name">${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span><span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username}</span>`;
-        list.appendChild(li);
-    });
-}
-
 function renderLocalGrid(items) {
     const grid = document.getElementById('fileGrid');
     grid.innerHTML = '';
@@ -404,6 +367,7 @@ function renderLocalGrid(items) {
             el.onclick = () => {
                 currentPathStr = item.fullPath;
                 renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
+                // FIX: Pfad splitten und ROOT davor
                 const crumbs = currentPathStr.split('/');
                 updateBreadcrumbs(['ROOT', ...crumbs]);
             };
@@ -473,11 +437,13 @@ function openFile(file) {
     document.getElementById('fileGrid').style.display = 'none';
     document.getElementById('filePreview').style.display = 'flex';
     document.getElementById('previewFileName').textContent = file.name;
+
     const btn = document.querySelector('#filePreview .btn-action');
     btn.style.opacity = "0.5"; btn.style.cursor = "default"; btn.onclick = null; btn.textContent = "[ LOCAL SOURCE ]";
 
     const contentDiv = document.getElementById('previewContent');
     contentDiv.textContent = "Loading preview...";
+
     const reader = new FileReader();
     reader.onload = (e) => {
         const isImage = file.name.match(/\.(jpeg|jpg|gif|png|webp)$/i);
@@ -490,7 +456,10 @@ function openFile(file) {
         } else { contentDiv.textContent = e.target.result; }
     };
     if (file.name.match(/\.(jpeg|jpg|gif|png|webp)$/i)) reader.readAsDataURL(file); else reader.readAsText(file);
-    updateBreadcrumbs([currentActiveFolderName, file.name]);
+
+    // FIX: Aktuellen Pfad nehmen + Dateiname
+    const parts = currentPathStr ? currentPathStr.split('/') : [];
+    updateBreadcrumbs(['ROOT', ...parts, file.name]);
 }
 
 function openRemoteFilePreview(item, peerId) {
@@ -507,47 +476,130 @@ function openRemoteFilePreview(item, peerId) {
 
     isPreviewMode = true;
     requestFileFromPeer(item.fullPath || item.name, peerId);
-    const crumbs = currentPathStr ? currentPathStr.split('/') : [currentActiveFolderName];
-    updateBreadcrumbs([currentActiveFolderName, item.name]);
+
+    // FIX: Pfad + Dateiname
+    const parts = currentPathStr ? currentPathStr.split('/') : [];
+    updateBreadcrumbs(['ROOT', ...parts, item.name]);
 }
 
 function closePreview() {
     document.getElementById('filePreview').style.display = 'none';
     document.getElementById('fileGrid').style.display = 'grid';
     incomingFileBuffer = [];
-    updateBreadcrumbs([currentActiveFolderName]);
+
+    // FIX: Zurück zum Ordner-Pfad (ohne Dateiname)
+    const parts = currentPathStr ? currentPathStr.split('/') : [];
+    updateBreadcrumbs(['ROOT', ...parts]);
 }
 
 function updateBreadcrumbs(pathArray) {
     const bar = document.getElementById('breadcrumbs');
-    bar.innerHTML = 'ROOT <span class="separator">></span> ';
+    bar.innerHTML = ''; // WICHTIG: Leeren, damit "ROOT" nicht doppelt kommt
+
     let accumulatedPath = "";
+
     pathArray.forEach((crumb, index) => {
-        if (index > 0) accumulatedPath = accumulatedPath ? `${accumulatedPath}/${crumb}` : crumb;
+        // Pfad für Navigation rekonstruieren (ab Index 1, da 0 ROOT ist)
+        if (index > 0) {
+            accumulatedPath = accumulatedPath ? `${accumulatedPath}/${crumb}` : crumb;
+        }
+
         const span = document.createElement('span');
         span.className = 'crumb';
         span.textContent = crumb;
+
+        // Klickbar machen (außer der letzte Eintrag - das ist der aktuelle Ort/Datei)
         if (index < pathArray.length - 1) {
+            span.style.cursor = "pointer";
             span.onclick = () => {
-                if (index === 0) return;
-                if (currentActivePeerId && currentActivePeerId !== socket.id) {
-                    navigateRemote(accumulatedPath, currentActivePeerId);
+                // 1. ANSICHT UMSCHALTEN (Wichtigster Fix!)
+                document.getElementById('filePreview').style.display = 'none';
+                document.getElementById('fileGrid').style.display = 'grid';
+                isPreviewMode = false;
+                incomingFileBuffer = [];
+
+                // 2. NAVIGIEREN
+                if (index === 0) {
+                    // Klick auf ROOT -> Zurück zum Start
+                    if (currentActivePeerId && currentActivePeerId !== socket.id) {
+                        navigateRemote("", currentActivePeerId);
+                    } else {
+                        currentPathStr = "";
+                        renderLocalGrid(getItemsInPath(myHostedFiles, ""));
+                        updateBreadcrumbs(['ROOT']);
+                    }
                 } else {
-                    currentPathStr = accumulatedPath;
-                    renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
-                    const newCrumbs = pathArray.slice(0, index + 1);
-                    updateBreadcrumbs(newCrumbs);
+                    // Klick auf Unterordner
+                    if (currentActivePeerId && currentActivePeerId !== socket.id) {
+                        navigateRemote(accumulatedPath, currentActivePeerId);
+                    } else {
+                        currentPathStr = accumulatedPath;
+                        renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
+                        // Pfad abschneiden und neu zeichnen
+                        const newCrumbs = pathArray.slice(0, index + 1);
+                        updateBreadcrumbs(newCrumbs);
+                    }
                 }
             };
-        } else { span.style.color = "#fff"; span.style.cursor = "default"; }
+        } else {
+            // Letztes Element: Nicht klickbar, weiß gefärbt
+            span.style.color = "#fff";
+            span.style.cursor = "default";
+        }
+
         bar.appendChild(span);
-        if(index < pathArray.length - 1) bar.innerHTML += '<span class="separator">></span>';
+
+        // Separator (>) hinzufügen (nicht nach dem letzten Element)
+        if(index < pathArray.length - 1) {
+            const sep = document.createElement('span');
+            sep.className = 'separator';
+            sep.textContent = '>';
+            bar.appendChild(sep);
+        }
     });
 }
 
-function renderSidebarMock() { /* Keep existing mock */ }
+function renderSidebar(shares) {
+    const list = document.getElementById('shareList');
+    list.innerHTML = '';
+    const shareIds = Object.keys(shares);
 
-// --- HELPERS (Logic) ---
+    if (shareIds.length === 0) {
+        list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No active drives.</li>';
+        return;
+    }
+
+    shareIds.forEach(socketId => {
+        const item = shares[socketId];
+        const isMe = (socketId === socket.id);
+        const li = document.createElement('li');
+        li.className = 'share-item';
+        if(isMe) li.style.cssText = 'color:#0f0; border-left:4px solid #0f0;';
+
+        li.innerHTML = `<span class="share-name">${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span><span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username}</span>`;
+
+        li.onclick = () => {
+            document.getElementById('filePreview').style.display = 'none';
+            document.getElementById('fileGrid').style.display = 'grid';
+            incomingFileBuffer = [];
+            currentActivePeerId = socketId;
+
+            document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
+            li.classList.add('active');
+
+            if(isMe) {
+                currentPathStr = item.folderName;
+                renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
+                // FIX: Explizit ROOT als Startpunkt setzen
+                updateBreadcrumbs(['ROOT', item.folderName]);
+            } else {
+                document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">ESTABLISHING P2P UPLINK...</div>';
+                connectToPeer(socketId);
+            }
+        };
+        list.appendChild(li);
+    });
+}
 
 function requestFileList(targetId) {
     if (peers[targetId]?.channel?.readyState === 'open') peers[targetId].channel.send(JSON.stringify({ type: 'REQUEST_ROOT' }));
