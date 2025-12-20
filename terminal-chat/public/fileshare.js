@@ -3,9 +3,9 @@ const socket = io();
 const earlyCandidates = {};
 let myHostedFiles = [];
 let currentRemoteFiles = [];
-let myRootFolderName = "ROOT"; // Der "Custom Name"
-let myRealRootName = "";       // Der echte Name des Ordners auf der Festplatte
-let myMountPassword = null;    // Passwort (null = keins)
+let myRootFolderName = "ROOT";
+let myRealRootName = "";
+let myMountPassword = null;
 let incomingFileBuffer = [];
 let isPreviewMode = false;
 let currentPathStr = "";
@@ -81,19 +81,16 @@ function closeMountModal() {
     pendingFiles = null;
 }
 
-// Hidden Input Change Listener (in fileshare.js, needs HTML element)
-// Stelle sicher, dass <input type="file" id="hiddenFolderInput" ...> im HTML existiert
+// Hidden Input Change Listener
 const hiddenInput = document.getElementById('hiddenFolderInput');
 if(hiddenInput) {
     hiddenInput.addEventListener('change', (e) => {
         if (e.target.files.length === 0) return;
         pendingFiles = Array.from(e.target.files);
 
-        // Echten Namen ermitteln
         const detectedName = pendingFiles[0].webkitRelativePath.split('/')[0];
         document.getElementById('selectedFolderName').textContent = detectedName;
 
-        // Name vorschlagen, falls leer
         if(document.getElementById('mountName').value === '') {
             document.getElementById('mountName').value = detectedName;
         }
@@ -111,22 +108,21 @@ function confirmMount() {
     const password = document.getElementById('mountPassword').value;
     const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-    // SET GLOBALS
+    // GLOBALS SETZEN
     myHostedFiles = pendingFiles;
-    myRootFolderName = customName; // Der Name, den User sehen
-    // Den echten Ordnernamen speichern wir für das Mapping
+    myRootFolderName = customName;
     myRealRootName = pendingFiles[0].webkitRelativePath.split('/')[0];
     myMountPassword = password || null;
 
+    console.log(`[MOUNT] Virtual: "${myRootFolderName}" -> Real: "${myRealRootName}"`);
+
     closeMountModal();
 
-    // UI Update
     document.getElementById('btnMount').style.display = 'none';
     const unmountBtn = document.getElementById('btnUnmount');
     unmountBtn.style.display = 'block';
     unmountBtn.innerText = `[-] UNMOUNT [${customName}]`;
 
-    // Server Info
     socket.emit('fs_start_hosting', {
         folderName: customName,
         allowedUsers: allowedUsers,
@@ -162,7 +158,7 @@ function submitPassword() {
     initiateConnectionWithPassword(peerId, pw);
 }
 
-// --- UI LOGIC (SIDEBAR & GRID) ---
+// --- UI LOGIC ---
 
 function renderSidebar(shares) {
     const list = document.getElementById('shareList');
@@ -191,20 +187,17 @@ function renderSidebar(shares) {
             li.classList.add('active');
 
             if (isMe) {
-                // LOCAL VIEW
+                // LOCAL
                 document.getElementById('filePreview').style.display = 'none';
                 document.getElementById('fileGrid').style.display = 'grid';
                 currentActivePeerId = socketId;
 
-                // Wir starten mit dem Custom Name als Pfad
                 currentPathStr = item.folderName;
-
-                // MAPPED Items holen
                 const items = getMappedLocalItems(currentPathStr);
                 renderLocalGrid(items);
                 updateBreadcrumbs(['ROOT', item.folderName]);
             } else {
-                // REMOTE VIEW
+                // REMOTE
                 if (item.isProtected) {
                     targetPeerForPassword = socketId;
                     document.getElementById('passwordModal').style.display = 'flex';
@@ -224,13 +217,9 @@ function initiateConnectionWithPassword(peerId, password) {
     document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING...<br>(Establishing secure P2P Tunnel)</div>';
     currentActivePeerId = peerId;
 
-    // Auth speichern
-    if(!peers[peerId]) peers[peerId] = {};
-    peers[peerId].authPassword = password;
-
-    connectToPeer(peerId);
+    // FIX: Passwort direkt übergeben!
+    connectToPeer(peerId, password);
 }
-
 
 function renderLocalGrid(items) {
     const grid = document.getElementById('fileGrid');
@@ -242,8 +231,6 @@ function renderLocalGrid(items) {
             const parts = currentPathStr.split('/').filter(Boolean);
             parts.pop();
             currentPathStr = parts.join('/');
-
-            // Wenn Pfad leer ist, zurück zum Root-Namen
             if(currentPathStr === "") currentPathStr = myRootFolderName;
 
             renderLocalGrid(getMappedLocalItems(currentPathStr));
@@ -260,15 +247,13 @@ function renderLocalGrid(items) {
         const el = createGridItem(item);
         if(item.type === 'folder') {
             el.onclick = () => {
-                currentPathStr = item.fullPath; // Das ist der virtuelle Pfad (CustomName/...)
+                currentPathStr = item.fullPath;
                 renderLocalGrid(getMappedLocalItems(currentPathStr));
-
                 const crumbs = currentPathStr.split('/').filter(Boolean);
                 updateBreadcrumbs(['ROOT', ...crumbs]);
             };
         } else {
             el.onclick = () => {
-                // Echte Datei finden über Mapping
                 const realPath = mapVirtualToReal(item.fullPath);
                 const realFile = myHostedFiles.find(f => f.webkitRelativePath === realPath);
                 if(realFile) openFile(realFile);
@@ -373,7 +358,6 @@ function updateBreadcrumbs(pathArray) {
     pathArray.forEach((crumb, index) => {
         if (index > 0) accumulatedPath = accumulatedPath ? `${accumulatedPath}/${crumb}` : crumb;
 
-        // FREEZE VALUE for closure
         const pathToThisCrumb = accumulatedPath;
 
         const span = document.createElement('span');
@@ -427,10 +411,8 @@ function closePreview() {
     updateBreadcrumbs(['ROOT', ...parts]);
 }
 
+// --- HELPER: PATH MAPPING ---
 
-// --- HELPER: PATH MAPPING (DAS IST DER FIX FÜR EMPTY FOLDERS) ---
-
-// Wandelt "CustomName/Sub" in "RealName/Sub" um
 function mapVirtualToReal(virtualPath) {
     if (!virtualPath) return "";
     if (myRootFolderName && myRealRootName && virtualPath.startsWith(myRootFolderName)) {
@@ -439,7 +421,6 @@ function mapVirtualToReal(virtualPath) {
     return virtualPath;
 }
 
-// Wandelt "RealName/Sub" in "CustomName/Sub" um
 function mapRealToVirtual(realPath) {
     if (!realPath) return "";
     if (myRootFolderName && myRealRootName && realPath.startsWith(myRealRootName)) {
@@ -448,26 +429,22 @@ function mapRealToVirtual(realPath) {
     return realPath;
 }
 
-// Liefert Items für das lokale Grid basierend auf virtuellem Pfad (Custom Name)
 function getMappedLocalItems(virtualPath) {
-    // 1. Suchepfad übersetzen (Custom -> Real)
     const realSearchPath = mapVirtualToReal(virtualPath);
+    console.log(`[DEBUG] Mapping: "${virtualPath}" -> "${realSearchPath}"`); // DEBUG LOG
 
-    // 2. Items suchen (mit echten Pfaden)
     const rawItems = getItemsInPath(myHostedFiles, realSearchPath);
+    console.log(`[DEBUG] Found ${rawItems.length} items.`); // DEBUG LOG
 
-    // 3. Ergebnis-Pfade zurückübersetzen (Real -> Custom) für die Anzeige
     return rawItems.map(item => {
-        return {
-            ...item,
-            fullPath: mapRealToVirtual(item.fullPath)
-        };
+        return { ...item, fullPath: mapRealToVirtual(item.fullPath) };
     });
 }
 
 // --- P2P CONNECTION LOGIC ---
 
-async function connectToPeer(targetId) {
+// FIX: password parameter added
+async function connectToPeer(targetId, password = null) {
     if (peers[targetId]) {
         if(peers[targetId].connection) peers[targetId].connection.close();
         delete peers[targetId];
@@ -479,7 +456,8 @@ async function connectToPeer(targetId) {
     let iceQueue = [];
     let offerSent = false;
 
-    setupChannelHandlers(channel, targetId);
+    // FIX: password passed to handlers
+    setupChannelHandlers(channel, targetId, password);
 
     peers[targetId] = { connection: pc, channel: channel, pendingQueue: [] };
 
@@ -513,7 +491,8 @@ async function handleP2PMessage(senderId, signal, type) {
         const pc = new RTCPeerConnection(iceConfig);
         pc.ondatachannel = (event) => {
             const channel = event.channel;
-            setupChannelHandlers(channel, senderId);
+            // Host braucht kein Passwort zum Antworten, aber wir lassen die Funktion generisch
+            setupChannelHandlers(channel, senderId, null);
             if(peers[senderId]) peers[senderId].channel = channel;
         };
         pc.onicecandidate = (event) => {
@@ -557,12 +536,12 @@ async function processPendingQueue(peerObj, pc) {
     }
 }
 
-function setupChannelHandlers(channel, peerId) {
+// FIX: password parameter added
+function setupChannelHandlers(channel, peerId, password) {
     channel.onopen = () => {
         console.log(`CHANNEL OPENED with ${peerId}`);
-        // PW mitsenden!
-        const pw = peers[peerId]?.authPassword || null;
-        channel.send(JSON.stringify({ type: 'REQUEST_ROOT', password: pw }));
+        // WICHTIG: Passwort mitsenden!
+        channel.send(JSON.stringify({ type: 'REQUEST_ROOT', password: password }));
     };
     channel.onmessage = (event) => {
         try {
@@ -592,45 +571,35 @@ function handleChannelMessage(msg, peerId, channel) {
 
     // --- HOST LOGIC ---
     if (msg.type === 'REQUEST_ROOT') {
-        // PASSWORD CHECK
         if (myMountPassword && msg.password !== myMountPassword) {
             channel.send(JSON.stringify({ type: 'ERROR', message: 'ACCESS DENIED: WRONG PASSWORD' }));
             return;
         }
 
-        // Mapped Root items senden
         const items = getMappedLocalItems(myRootFolderName);
         sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: items, path: myRootFolderName });
     }
 
     if (msg.type === 'REQUEST_DIRECTORY') {
-        // Mapped items senden
         const items = getMappedLocalItems(msg.path);
         sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: items, path: msg.path });
     }
 
     if (msg.type === 'REQUEST_DOWNLOAD') {
-        // 1. Virtuellen Pfad (CustomName) in Echten Pfad (RealName) wandeln
         const realPath = mapVirtualToReal(msg.filename);
-
         let file = myHostedFiles.find(f => f.webkitRelativePath === realPath);
-        // Fallback Name Check
         if(!file) file = myHostedFiles.find(f => f.name === msg.filename.split('/').pop());
 
         if (file) streamFileToPeer(file, channel);
-        else {
-            channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found.' }));
-        }
+        else channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found.' }));
     }
 
     if (msg.type === 'REQUEST_RECURSIVE_LIST') {
         const realSearchPath = mapVirtualToReal(msg.path);
         const files = getAllFilesInPathRecursive(myHostedFiles, realSearchPath);
 
-        // Wir müssen dem Client die virtuellen Pfade zurückgeben!
         const list = files.map(f => {
             const virtualFull = mapRealToVirtual(f.webkitRelativePath);
-            // Relativer Pfad im Zip: Wenn wir Ordner "X" laden, und Datei ist "X/Y/Z", wollen wir "Y/Z"
             let relative = virtualFull;
             if(msg.path && virtualFull.startsWith(msg.path)) {
                 relative = virtualFull.substring(msg.path.length + 1);
@@ -656,7 +625,6 @@ function handleChannelMessage(msg, peerId, channel) {
         if(isZipBatchMode) processZipQueue();
         else if (isPreviewMode) document.getElementById('previewContent').innerHTML = `<div style="color:red;margin-top:20%;text-align:center">${msg.message}</div>`;
         else {
-            // Wenn wir noch beim Verbinden sind (Grid zeigt loading), dann dort anzeigen
             document.getElementById('fileGrid').innerHTML = `<div class="empty-state" style="color:red;">${msg.message}</div>`;
             alert(msg.message);
         }
@@ -667,23 +635,10 @@ function handleChannelMessage(msg, peerId, channel) {
         if (msg.isLast) {
             const blob = new Blob(incomingFileBuffer, {type: 'application/octet-stream'});
             if (isZipBatchMode) {
-                let p = msg.filename; // filename ist hier der volle virtuelle Pfad
-                // Wir müssen ihn relativ zum Zip Root machen, aber das passiert jetzt schon im Host Mapping
-                // Warte: Host sendet fullPath als filename.
-                // Client hat zipQueue objects mit relativePath.
-                // Wir sollten processZipQueue anpassen, um relativePath zu nutzen?
-                // Einfacher: Host schickt nur Rohdaten. Client muss wissen wo es hin gehört.
-                // Workaround: Wir speichern den aktuellen Zip-File-Namen global? Nein async.
-
-                // Besserer Fix: Host sendet in msg NICHT NUR filename, sondern auch Metadaten?
-                // Oder wir nutzen den currentPathStr Logik hier.
-
-                // Simple logic:
+                let p = msg.filename;
                 if (currentPathStr && p.startsWith(currentPathStr)) p = p.substring(currentPathStr.length + 1);
-
                 if(zipInstance) zipInstance.file(p, blob);
                 incomingFileBuffer = []; processZipQueue();
-
             } else if (isPreviewMode) {
                 renderRemoteBlob(blob, msg.filename);
                 incomingFileBuffer = [];
@@ -695,397 +650,59 @@ function handleChannelMessage(msg, peerId, channel) {
     }
 }
 
-// Helper UI functions
-function addBackButton(grid, onClick) {
-    const backDiv = document.createElement('div');
-    backDiv.className = 'file-icon';
-    backDiv.style.opacity = "0.7";
-    backDiv.innerHTML = `<div class="icon-img" style="font-size:30px; display:flex; justify-content:center; align-items:center; border:1px solid #0f0; border-radius:50%;"><svg viewBox="0 0 24 24" style="width:32px; height:32px; fill:#0f0;"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg></div><div class="file-label">[ GO BACK ]</div>`;
-    backDiv.onclick = onClick;
-    grid.appendChild(backDiv);
+// --- HELPERS ---
+function createGridItem(i){
+    const d=document.createElement('div'); d.className='file-icon';
+    d.innerHTML=`<div class="icon-img">${i.type==='folder'?'[DIR]':'[FILE]'}</div><div class="file-label">${i.name}</div>`;
+    if(i.type==='folder') d.querySelector('.icon-img').innerHTML = `<svg viewBox="0 0 24 24" style="width:48px; height:48px; fill:#0f0;"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>`;
+    else d.querySelector('.icon-img').innerHTML = `<svg viewBox="0 0 24 24" style="width:48px; height:48px; fill:#0f0;"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>`;
+    return d;
 }
 
-function createGridItem(item) {
-    const el = document.createElement('div');
-    el.className = 'file-icon';
-    let iconSvg = item.type === 'folder' ?
-        `<svg viewBox="0 0 24 24" style="width:48px; height:48px; fill:#0f0;"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>` :
-        `<svg viewBox="0 0 24 24" style="width:48px; height:48px; fill:#0f0;"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>`;
-    el.innerHTML = `<div class="icon-img">${iconSvg}</div><div class="file-label">${item.name}</div>`;
-    return el;
+function addBackButton(g,cb){
+    const d=document.createElement('div'); d.className='file-icon'; d.style.opacity='0.7';
+    d.innerHTML=`<div class="icon-img" style="font-size:30px;display:flex;justify-content:center;align-items:center;border:1px solid #0f0;border-radius:50%;"><svg viewBox="0 0 24 24" style="width:32px; height:32px; fill:#0f0;"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg></div><div class="file-label">[ GO BACK ]</div>`;
+    d.onclick=cb; g.appendChild(d);
 }
 
-function openFile(file) {
-    document.getElementById('fileGrid').style.display = 'none';
-    document.getElementById('filePreview').style.display = 'flex';
-    document.getElementById('previewFileName').textContent = file.name;
+function sendLargeJSON(c,t,p){ const j=JSON.stringify({type:t,payload:p}); const MAX=12000; for(let i=0;i<j.length;i+=MAX) c.send(JSON.stringify({type:'JSON_CHUNK',data:j.slice(i,i+MAX),isLast:i+MAX>=j.length})); }
 
-    const btn = document.querySelector('#filePreview .btn-action');
-    btn.style.opacity = "0.5"; btn.style.cursor = "default"; btn.onclick = null; btn.textContent = "[ LOCAL SOURCE ]";
-
-    const contentDiv = document.getElementById('previewContent');
-    contentDiv.textContent = "Loading preview...";
-
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        const isImage = file.name.match(/\.(jpeg|jpg|gif|png|webp)$/i);
-        if (isImage) {
-            contentDiv.innerHTML = '';
-            const img = document.createElement('img');
-            img.src = e.target.result;
-            img.style.maxWidth = '100%'; img.style.border = '1px solid #0f0';
-            contentDiv.appendChild(img);
-        } else { contentDiv.textContent = e.target.result; }
-    };
-    if (file.name.match(/\.(jpeg|jpg|gif|png|webp)$/i)) reader.readAsDataURL(file); else reader.readAsText(file);
-
-    // FIX: Pfad sauber bauen
-    const parts = currentPathStr ? currentPathStr.split('/').filter(Boolean) : [];
-    updateBreadcrumbs(['ROOT', ...parts, file.name]);
+function getItemsInPath(files,path){
+    return files.filter(f => f.webkitRelativePath.startsWith(path + '/')).map(f => {
+        const p = f.webkitRelativePath.substring(path.length + 1).split('/');
+        return p.length === 1 ?
+            {name:p[0], type:'file', fullPath:f.webkitRelativePath} :
+            {name:p[0], type:'folder', fullPath:path+'/'+p[0]};
+    }).filter((v,i,a) => a.findIndex(t => (t.name === v.name)) === i);
 }
 
-function openRemoteFilePreview(item, peerId) {
-    document.getElementById('fileGrid').style.display = 'none';
-    document.getElementById('filePreview').style.display = 'flex';
-    document.getElementById('previewFileName').textContent = item.name;
-    document.getElementById('previewContent').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:20%;">[ P2P STREAMING IN PROGRESS... ]<br>Receiving Data packets...</div>';
+function getAllFilesInPathRecursive(files,path){ return files.filter(f=>f.webkitRelativePath.startsWith(path+'/')); }
 
-    const btn = document.querySelector('#filePreview .btn-action');
-    const newBtn = btn.cloneNode(true);
-    btn.parentNode.replaceChild(newBtn, btn);
-    newBtn.textContent = "[ SAVE TO DISK ]"; newBtn.style.opacity = "1"; newBtn.style.cursor = "pointer";
-    newBtn.onclick = () => { isPreviewMode = false; requestFileFromPeer(item.fullPath || item.name, peerId); };
-
-    isPreviewMode = true;
-    requestFileFromPeer(item.fullPath || item.name, peerId);
-
-    // FIX: Pfad + Dateiname
-    const parts = currentPathStr ? currentPathStr.split('/') : [];
-    updateBreadcrumbs(['ROOT', ...parts, item.name]);
+function streamFileToPeer(f,c){
+    const chunk=16384; let off=0; const r=new FileReader();
+    r.onload=e=>{ if(c.readyState!=='open')return; c.send(JSON.stringify({type:'FILE_CHUNK',filename:f.webkitRelativePath,data:arrayBufferToBase64(e.target.result),isLast:(off+chunk>=f.size)})); off+=chunk; if(off<f.size)setTimeout(readNext,5); };
+    const readNext=()=>r.readAsArrayBuffer(f.slice(off,off+chunk)); readNext();
 }
-
-function closePreview() {
-    document.getElementById('filePreview').style.display = 'none';
-    document.getElementById('fileGrid').style.display = 'grid';
-    incomingFileBuffer = [];
-
-    // FIX: Zurück zum Ordner-Pfad (ohne Dateiname)
-    const parts = currentPathStr ? currentPathStr.split('/') : [];
-    updateBreadcrumbs(['ROOT', ...parts]);
+function arrayBufferToBase64(b){ let binary=''; const bytes=new Uint8Array(b); for(let i=0;i<bytes.byteLength;i++)binary+=String.fromCharCode(bytes[i]); return window.btoa(binary); }
+function base64ToArrayBuffer(b){ const s=window.atob(b); const y=new Uint8Array(s.length); for(let i=0;i<s.length;i++)y[i]=s.charCodeAt(i); return y.buffer; }
+function renderRemoteBlob(b,n){ const u=URL.createObjectURL(b); document.getElementById('previewContent').innerHTML=`<a href="${u}" download="${n}" style="color:#0f0">Download ${n}</a>`; }
+function triggerBrowserDownload(b,n){ const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download=n; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
+function requestFileList(tid){ if(peers[tid]?.channel?.readyState==='open') peers[tid].channel.send(JSON.stringify({type:'REQUEST_ROOT'})); }
+function navigateRemote(p,tid){ if(peers[tid]?.channel) peers[tid].channel.send(JSON.stringify({type:'REQUEST_DIRECTORY',path:p})); }
+function requestFileFromPeer(n,tid){ incomingFileBuffer=[]; if(peers[tid]?.channel) peers[tid].channel.send(JSON.stringify({type:'REQUEST_DOWNLOAD',filename:n})); }
+async function downloadFolderAsZip(p,l,tid){
+    if (l) { /* local */ }
+    else if (tid) { zipInstance = new JSZip(); zipQueue = []; isZipBatchMode = false; isZipping = true; currentZipPeerId = tid; peers[tid].channel.send(JSON.stringify({ type: 'REQUEST_RECURSIVE_LIST', path: p })); document.getElementById('btnZipDownload').textContent="[ REQUESTING... ]"; }
 }
-
-function updateBreadcrumbs(pathArray) {
-    const bar = document.getElementById('breadcrumbs');
-    bar.innerHTML = '';
-
-    let accumulatedPath = "";
-
-    pathArray.forEach((crumb, index) => {
-        // Pfad bauen
-        if (index > 0) {
-            accumulatedPath = accumulatedPath ? `${accumulatedPath}/${crumb}` : crumb;
-        }
-
-        // WICHTIG: Den aktuellen Stand des Pfades für DIESEN Klick einfrieren!
-        const pathToThisCrumb = accumulatedPath;
-
-        const span = document.createElement('span');
-        span.className = 'crumb';
-        span.textContent = crumb;
-
-        // Klickbar machen (außer der letzte Eintrag)
-        if (index < pathArray.length - 1) {
-            span.style.cursor = "pointer";
-            span.onclick = () => {
-                // 1. ANSICHT ZURÜCKSETZEN
-                document.getElementById('filePreview').style.display = 'none';
-                document.getElementById('fileGrid').style.display = 'grid';
-                isPreviewMode = false;
-                incomingFileBuffer = [];
-
-                // 2. NAVIGIEREN
-                if (index === 0) {
-                    // ROOT Klick
-                    if (currentActivePeerId && currentActivePeerId !== socket.id) {
-                        navigateRemote("", currentActivePeerId);
-                    } else {
-                        currentPathStr = "";
-                        renderLocalGrid(getItemsInPath(myHostedFiles, ""));
-                        updateBreadcrumbs(['ROOT']);
-                    }
-                } else {
-                    // ORDNER Klick (Nutzt jetzt die eingefrorene Variable!)
-                    if (currentActivePeerId && currentActivePeerId !== socket.id) {
-                        navigateRemote(pathToThisCrumb, currentActivePeerId);
-                    } else {
-                        currentPathStr = pathToThisCrumb;
-
-                        // Inhalt laden
-                        const items = getItemsInPath(myHostedFiles, currentPathStr);
-                        if(items.length === 0 && currentPathStr !== "") {
-                            // Fallback, falls Pfad ungültig
-                            console.warn("Path fallback trigger");
-                            currentPathStr = "";
-                            renderLocalGrid(getItemsInPath(myHostedFiles, ""));
-                            updateBreadcrumbs(['ROOT']);
-                            return;
-                        }
-                        renderLocalGrid(items);
-
-                        // Breadcrumbs neu zeichnen (alles rechts vom Klick abschneiden)
-                        const newCrumbs = pathArray.slice(0, index + 1);
-                        updateBreadcrumbs(newCrumbs);
-                    }
-                }
-            };
-        } else {
-            // Letztes Element (aktueller Ort)
-            span.style.color = "#fff";
-            span.style.cursor = "default";
-        }
-
-        bar.appendChild(span);
-
-        if(index < pathArray.length - 1) {
-            const sep = document.createElement('span');
-            sep.className = 'separator';
-            sep.textContent = '>';
-            bar.appendChild(sep);
-        }
-    });
-}
-
-// Ersetzte renderSidebar, um Schloss-Icon und Passwort-Check einzubauen
-function renderSidebar(shares) {
-    const list = document.getElementById('shareList');
-    list.innerHTML = '';
-    const shareIds = Object.keys(shares);
-
-    if (shareIds.length === 0) {
-        list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No active drives.</li>';
-        return;
-    }
-
-    shareIds.forEach(socketId => {
-        const item = shares[socketId];
-        const isMe = (socketId === socket.id);
-        const isLocked = item.isProtected && !isMe; // Eigene Ordner brauchen kein PW
-
-        const li = document.createElement('li');
-        li.className = 'share-item';
-        if(isMe) li.style.cssText = 'color:#0f0; border-left:4px solid #0f0;';
-
-        // Anzeige mit Schloss, falls nötig
-        const lockIcon = isLocked ? '🔒 ' : '';
-        li.innerHTML = `<span class="share-name">${lockIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span><span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username}</span>`;
-
-        li.onclick = () => {
-            // UI Reset
-            document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
-            li.classList.add('active');
-
-            if (isMe) {
-                // Lokal öffnen (wie bisher)
-                document.getElementById('filePreview').style.display = 'none';
-                document.getElementById('fileGrid').style.display = 'grid';
-                currentActivePeerId = socketId;
-                currentPathStr = item.folderName;
-                renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
-                updateBreadcrumbs(['ROOT', item.folderName]);
-            } else {
-                // Remote öffnen
-                if (item.isProtected) {
-                    // Passwort abfragen!
-                    targetPeerForPassword = socketId;
-                    document.getElementById('passwordModal').style.display = 'flex';
-                    document.getElementById('accessPassword').focus();
-                } else {
-                    // Direkt verbinden (Kein Passwort)
-                    initiateConnectionWithPassword(socketId, null);
-                }
-            }
-        };
-        list.appendChild(li);
-    });
-}
-
-// Neue Funktion, die connectToPeer aufruft und PW speichert
-function initiateConnectionWithPassword(peerId, password) {
-    document.getElementById('filePreview').style.display = 'none';
-    document.getElementById('fileGrid').style.display = 'grid';
-    document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING P2P UPLINK...</div>';
-    currentActivePeerId = peerId;
-
-    // Wir speichern das Passwort temporär im Peer-Objekt,
-    // damit wir es senden können, sobald der Channel offen ist.
-    if(!peers[peerId]) peers[peerId] = {};
-    peers[peerId].authPassword = password; // Speichern für Handshake
-
-    connectToPeer(peerId);
-}
-
-function requestFileList(targetId) {
-    if (peers[targetId]?.channel?.readyState === 'open') peers[targetId].channel.send(JSON.stringify({ type: 'REQUEST_ROOT' }));
-}
-
-function navigateRemote(path, peerId) {
-    if (peers[peerId]?.channel) {
-        console.log(`Navigating to: ${path}`);
-        peers[peerId].channel.send(JSON.stringify({ type: 'REQUEST_DIRECTORY', path: path }));
-    }
-}
-
-function requestFileFromPeer(pathOrName, peerId) {
-    incomingFileBuffer = [];
-    if (peers[peerId]?.channel) {
-        console.log(`Requesting ${pathOrName}`);
-        peers[peerId].channel.send(JSON.stringify({ type: 'REQUEST_DOWNLOAD', filename: pathOrName }));
-    }
-}
-
-function sendLargeJSON(channel, type, payload) {
-    const json = JSON.stringify({ type, payload });
-    const MAX = 12000;
-    for (let i = 0; i < json.length; i += MAX) {
-        channel.send(JSON.stringify({ type: 'JSON_CHUNK', data: json.slice(i, i + MAX), isLast: i + MAX >= json.length }));
-    }
-}
-
-function getItemsInPath(allFiles, currentPath) {
-    const items = [];
-    const knownFolders = new Set();
-    allFiles.forEach(file => {
-        const fullPath = file.webkitRelativePath;
-        if (!fullPath.startsWith(currentPath + '/')) { if (currentPath !== "" && currentPath !== file.webkitRelativePath.split('/')[0]) return; }
-        const relativePart = fullPath.substring(currentPath.length + (currentPath ? 1 : 0));
-        const parts = relativePart.split('/');
-        if (parts.length === 1) {
-            if(parts[0] !== "") items.push({ name: parts[0], type: 'file', size: file.size, fullPath: fullPath });
-        } else {
-            const folderName = parts[0];
-            if (!knownFolders.has(folderName)) {
-                knownFolders.add(folderName);
-                items.push({ name: folderName, type: 'folder', fullPath: currentPath ? `${currentPath}/${folderName}` : folderName });
-            }
-        }
-    });
-    return items;
-}
-
-function getAllFilesInPathRecursive(allFiles, startPath) {
-    return allFiles.filter(file => {
-        const path = file.webkitRelativePath;
-        if (startPath === "" || startPath === myRootFolderName) return true;
-        return path.startsWith(startPath + '/');
-    });
-}
-
-function streamFileToPeer(file, channel) {
-    if (file.size === 0) {
-        channel.send(JSON.stringify({ type: 'FILE_CHUNK', filename: file.webkitRelativePath || file.name, data: "", isLast: true }));
-        return;
-    }
-    const chunkSize = 16384;
-    let offset = 0;
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        if (channel.readyState !== 'open') return;
-        channel.send(JSON.stringify({ type: 'FILE_CHUNK', filename: file.webkitRelativePath || file.name, data: arrayBufferToBase64(e.target.result), isLast: (offset + chunkSize >= file.size) }));
-        offset += chunkSize;
-        if (offset < file.size) setTimeout(readNextChunk, 10);
-        else console.log("Upload complete.");
-    };
-    const readNextChunk = () => { const slice = file.slice(offset, offset + chunkSize); reader.readAsArrayBuffer(slice); };
-    readNextChunk();
-}
-
-// --- UTILS ---
-function arrayBufferToBase64(buffer) {
-    let binary = '';
-    const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) binary += String.fromCharCode(bytes[i]);
-    return window.btoa(binary);
-}
-function base64ToArrayBuffer(base64) {
-    const binary_string = window.atob(base64);
-    const bytes = new Uint8Array(binary_string.length);
-    for (let i = 0; i < binary_string.length; i++) bytes[i] = binary_string.charCodeAt(i);
-    return bytes.buffer;
-}
-function renderRemoteBlob(blob, filename) {
-    const contentDiv = document.getElementById('previewContent');
-    contentDiv.innerHTML = '';
-    const isImage = filename.match(/\.(jpeg|jpg|gif|png|webp)$/i);
-    if (isImage) {
-        const url = URL.createObjectURL(blob);
-        const img = document.createElement('img');
-        img.src = url;
-        img.style.maxWidth = '100%'; img.style.border = '1px solid #0f0';
-        contentDiv.appendChild(img);
-    } else {
-        const reader = new FileReader();
-        reader.onload = (e) => { contentDiv.textContent = e.target.result; };
-        reader.readAsText(blob);
-    }
-}
-function triggerBrowserDownload(blob, filename) {
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = filename;
-    document.body.appendChild(a); a.click(); document.body.removeChild(a);
-}
-
-// --- ZIP LOGIC ---
-async function downloadFolderAsZip(path, isLocal, peerId) {
-    const folderName = path.split('/').pop() || "archive";
-    if (isLocal) {
-        const zip = new JSZip();
-        const filesToZip = getAllFilesInPathRecursive(myHostedFiles, path);
-        if(filesToZip.length === 0) { alert("Folder is empty."); return; }
-        const btn = document.getElementById('btnZipDownload');
-        btn.textContent = "[ ZIPPING... ]";
-        filesToZip.forEach(file => {
-            let relativePath = file.webkitRelativePath;
-            if(path) relativePath = relativePath.substring(path.length + 1);
-            zip.file(relativePath, file);
-        });
-        const content = await zip.generateAsync({type:"blob"});
-        triggerBrowserDownload(content, `${folderName}.zip`);
-        btn.textContent = `[ DOWNLOAD '${folderName}' AS .ZIP ]`;
-    } else if (peerId) {
-        zipInstance = new JSZip(); zipQueue = []; isZipBatchMode = false;
-        const btn = document.getElementById('btnZipDownload');
-        btn.textContent = "[ REQUESTING LIST... ]";
-        isZipping = true; currentZipPeerId = peerId;
-        peers[peerId].channel.send(JSON.stringify({ type: 'REQUEST_RECURSIVE_LIST', path: path }));
-    }
-}
-
-let zipInstance = null;
-let currentZipPeerId = null;
-let isZipping = false;
-
-function processZipQueue() {
+function processZipQueue(){
     if (zipQueue.length === 0) { finalizeRemoteZip(); return; }
-    const nextFile = zipQueue.shift();
-    const btn = document.getElementById('btnZipDownload');
-    if(btn) btn.textContent = `[ ZIPPING: ${zipQueue.length} FILES ]`;
-    isZipBatchMode = true;
-    requestFileFromPeer(nextFile.fullPath, currentZipPeerId);
+    const next = zipQueue.shift(); document.getElementById('btnZipDownload').textContent = `[ ZIPPING: ${zipQueue.length} ]`;
+    isZipBatchMode = true; requestFileFromPeer(next.fullPath, currentZipPeerId);
 }
-
-async function finalizeRemoteZip() {
-    if (!zipInstance) { isZipping = false; isZipBatchMode = false; return; }
-    const btn = document.getElementById('btnZipDownload');
-    if(btn) btn.textContent = "[ FINALIZING ZIP... ]";
-    try {
-        const content = await zipInstance.generateAsync({type:"blob"});
-        const name = currentPathStr.split('/').pop() || "remote_archive";
-        triggerBrowserDownload(content, `${name}.zip`);
-        if(btn) btn.textContent = "[ COMPLETE ]";
-    } catch (e) { console.error(e); }
-    finally {
-        isZipping = false; isZipBatchMode = false; currentZipPeerId = null; zipInstance = null; zipQueue = [];
-        setTimeout(() => { if(btn) btn.textContent = `[ DOWNLOAD AS .ZIP ]`; }, 3000);
-    }
+async function finalizeRemoteZip(){
+    if(!zipInstance) { isZipping=false; isZipBatchMode=false; return; }
+    const c=await zipInstance.generateAsync({type:"blob"}); triggerBrowserDownload(c, `${currentPathStr.split('/').pop()}.zip`);
+    isZipping=false; isZipBatchMode=false; zipInstance=null; zipQueue=[];
+    document.getElementById('btnZipDownload').textContent="[ DONE ]"; setTimeout(()=>document.getElementById('btnZipDownload').textContent="[ DOWNLOAD ZIP ]", 2000);
 }
+function renderSidebarMock(){ }
