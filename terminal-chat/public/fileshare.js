@@ -82,17 +82,25 @@ function closeMountModal() {
     pendingFiles = null;
 }
 
+// Hidden Input Change Listener
 const hiddenInput = document.getElementById('hiddenFolderInput');
 if(hiddenInput) {
     hiddenInput.addEventListener('change', (e) => {
         if (e.target.files.length === 0) return;
         pendingFiles = Array.from(e.target.files);
 
-        const detectedName = pendingFiles[0].webkitRelativePath.split('/')[0];
-        document.getElementById('selectedFolderName').textContent = detectedName;
+        // Root-Ordnernamen ermitteln
+        const rootName = pendingFiles[0].webkitRelativePath.split('/')[0];
 
+        // HINWEIS: Browser verbieten den Zugriff auf den absoluten Pfad (C:/...).
+        // Stattdessen zeigen wir jetzt technische Details (Typ + Anzahl) an:
+        document.getElementById('selectedFolderName').textContent = `📂 /${rootName}/ [${pendingFiles.length} FILES DETECTED]`;
+        document.getElementById('selectedFolderName').style.color = "#0f0"; // Hacker-Grün
+        document.getElementById('selectedFolderName').style.fontFamily = "monospace";
+
+        // Name vorschlagen, falls leer
         if(document.getElementById('mountName').value === '') {
-            document.getElementById('mountName').value = detectedName;
+            document.getElementById('mountName').value = rootName;
         }
     });
 }
@@ -108,17 +116,45 @@ function confirmMount() {
     const password = document.getElementById('mountPassword').value;
     const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
+    // GLOBALS SETZEN
     myHostedFiles = pendingFiles;
     myRootFolderName = customName;
     myRealRootName = pendingFiles[0].webkitRelativePath.split('/')[0];
     myMountPassword = password || null;
 
+    console.log(`[MOUNT] Virtual: "${myRootFolderName}" -> Real: "${myRealRootName}"`);
+
     closeMountModal();
 
+    // UI Update (Buttons tauschen)
     document.getElementById('btnMount').style.display = 'none';
     const unmountBtn = document.getElementById('btnUnmount');
     unmountBtn.style.display = 'block';
     unmountBtn.innerText = `[-] UNMOUNT [${customName}]`;
+
+    // --- NEU: AUTOMATISCH IN DEN EIGENEN ORDNER SPRINGEN ---
+
+    // 1. Ansicht aufräumen (Falls gerade ein Remote-File offen war)
+    document.getElementById('filePreview').style.display = 'none';
+    document.getElementById('fileGrid').style.display = 'grid';
+    document.getElementById('fileGrid').innerHTML = '';
+    incomingFileBuffer = [];
+    isPreviewMode = false;
+
+    // 2. Den Fokus auf MICH (Socket ID) setzen
+    currentActivePeerId = socket.id;
+
+    // 3. Lokalen Inhalt rendern
+    currentPathStr = customName;
+    const items = getMappedLocalItems(currentPathStr);
+    renderLocalGrid(items);
+    updateBreadcrumbs(['ROOT', customName]);
+
+    // 4. Sidebar Highlight entfernen (damit nicht noch der alte User markiert ist)
+    // (Der grüne Rahmen um deinen eigenen Eintrag kommt automatisch, sobald der Server die Liste updated)
+    document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
+
+    // --------------------------------------------------------
 
     socket.emit('fs_start_hosting', {
         folderName: customName,
