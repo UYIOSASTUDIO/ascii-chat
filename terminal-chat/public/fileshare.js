@@ -349,9 +349,10 @@ function renderLocalGrid(items) {
     grid.innerHTML = '';
     document.getElementById('folderActions').style.display = 'none';
 
+    // Back Button
     if (currentPathStr && currentPathStr !== myRootFolderName) {
         addBackButton(grid, () => {
-            const parts = currentPathStr.split('/');
+            const parts = currentPathStr.split('/').filter(Boolean); // WICHTIG: Leere Teile filtern
             parts.pop();
             currentPathStr = parts.join('/');
             renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
@@ -359,7 +360,10 @@ function renderLocalGrid(items) {
         });
     }
 
-    if(items.length === 0) { grid.innerHTML += '<div class="empty-state">EMPTY FOLDER</div>'; return; }
+    if(items.length === 0) {
+        grid.innerHTML += '<div class="empty-state">EMPTY FOLDER</div>';
+        return;
+    }
 
     items.forEach(item => {
         const el = createGridItem(item);
@@ -367,8 +371,9 @@ function renderLocalGrid(items) {
             el.onclick = () => {
                 currentPathStr = item.fullPath;
                 renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
-                // FIX: Pfad splitten und ROOT davor
-                const crumbs = currentPathStr.split('/');
+
+                // FIX: Pfad sauber bauen ohne Duplikate
+                const crumbs = currentPathStr.split('/').filter(Boolean);
                 updateBreadcrumbs(['ROOT', ...crumbs]);
             };
         } else {
@@ -457,8 +462,8 @@ function openFile(file) {
     };
     if (file.name.match(/\.(jpeg|jpg|gif|png|webp)$/i)) reader.readAsDataURL(file); else reader.readAsText(file);
 
-    // FIX: Aktuellen Pfad nehmen + Dateiname
-    const parts = currentPathStr ? currentPathStr.split('/') : [];
+    // FIX: Pfad sauber bauen
+    const parts = currentPathStr ? currentPathStr.split('/').filter(Boolean) : [];
     updateBreadcrumbs(['ROOT', ...parts, file.name]);
 }
 
@@ -494,12 +499,12 @@ function closePreview() {
 
 function updateBreadcrumbs(pathArray) {
     const bar = document.getElementById('breadcrumbs');
-    bar.innerHTML = ''; // WICHTIG: Leeren, damit "ROOT" nicht doppelt kommt
+    bar.innerHTML = ''; // WICHTIG: Leeren, damit nichts doppelt ist
 
     let accumulatedPath = "";
 
     pathArray.forEach((crumb, index) => {
-        // Pfad für Navigation rekonstruieren (ab Index 1, da 0 ROOT ist)
+        // Pfad sauber rekonstruieren (Index 0 ist immer ROOT und gehört nicht in den String)
         if (index > 0) {
             accumulatedPath = accumulatedPath ? `${accumulatedPath}/${crumb}` : crumb;
         }
@@ -508,11 +513,11 @@ function updateBreadcrumbs(pathArray) {
         span.className = 'crumb';
         span.textContent = crumb;
 
-        // Klickbar machen (außer der letzte Eintrag - das ist der aktuelle Ort/Datei)
+        // Klickbar machen (außer der letzte Eintrag)
         if (index < pathArray.length - 1) {
             span.style.cursor = "pointer";
             span.onclick = () => {
-                // 1. ANSICHT UMSCHALTEN (Wichtigster Fix!)
+                // 1. ANSICHT RESETTEN (File zu, Grid auf)
                 document.getElementById('filePreview').style.display = 'none';
                 document.getElementById('fileGrid').style.display = 'grid';
                 isPreviewMode = false;
@@ -520,7 +525,7 @@ function updateBreadcrumbs(pathArray) {
 
                 // 2. NAVIGIEREN
                 if (index === 0) {
-                    // Klick auf ROOT -> Zurück zum Start
+                    // Klick auf ROOT -> Alles Resetten
                     if (currentActivePeerId && currentActivePeerId !== socket.id) {
                         navigateRemote("", currentActivePeerId);
                     } else {
@@ -534,22 +539,30 @@ function updateBreadcrumbs(pathArray) {
                         navigateRemote(accumulatedPath, currentActivePeerId);
                     } else {
                         currentPathStr = accumulatedPath;
-                        renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
-                        // Pfad abschneiden und neu zeichnen
+                        // Prüfen ob Pfad existiert, sonst Root laden (Sicherheits-Fallback)
+                        const items = getItemsInPath(myHostedFiles, currentPathStr);
+                        if(items.length === 0 && currentPathStr !== "") {
+                            console.warn("Path not found, fallback to root");
+                            currentPathStr = "";
+                            renderLocalGrid(getItemsInPath(myHostedFiles, ""));
+                            updateBreadcrumbs(['ROOT']);
+                            return;
+                        }
+                        renderLocalGrid(items);
+
+                        // Breadcrumbs neu zeichnen (alles rechts vom Klick abschneiden)
                         const newCrumbs = pathArray.slice(0, index + 1);
                         updateBreadcrumbs(newCrumbs);
                     }
                 }
             };
         } else {
-            // Letztes Element: Nicht klickbar, weiß gefärbt
             span.style.color = "#fff";
             span.style.cursor = "default";
         }
 
         bar.appendChild(span);
 
-        // Separator (>) hinzufügen (nicht nach dem letzten Element)
         if(index < pathArray.length - 1) {
             const sep = document.createElement('span');
             sep.className = 'separator';
