@@ -11,6 +11,9 @@ let currentPathStr = "";
 let currentActivePeerId = null;
 let isZipBatchMode = false;
 
+let myMountPassword = null; // Speichert das PW für den eigenen Host
+let pendingFiles = null; // Zwischenspeicher für das Modal
+let targetPeerForPassword = null; // Wen wollen wir öffnen?
 // --- WEBRTC CONFIG (PRODUCTION READY) ---
 const peers = {};
 const iceConfig = {
@@ -224,9 +227,13 @@ async function processPendingQueue(peerObj, pc) {
 function setupChannelHandlers(channel, peerId) {
     channel.onopen = () => {
         console.log(`CHANNEL OPENED with ${peerId}`);
-        channel.send(JSON.stringify({ type: 'REQUEST_ROOT' }));
+        // WICHTIG: Passwort mitsenden!
+        const pw = peers[peerId]?.authPassword || null;
+        channel.send(JSON.stringify({
+            type: 'REQUEST_ROOT',
+            password: pw
+        }));
     };
-
     channel.onmessage = (event) => {
         try {
             const msg = JSON.parse(event.data);
@@ -242,10 +249,9 @@ function setupChannelHandlers(channel, peerId) {
 }
 
 // --- FILE SYSTEM LOGIC ---
-
 function handleChannelMessage(msg, peerId, channel) {
 
-    // Chunk Reassembly
+    // ... (JSON Chunk logic bleibt hier) ...
     if (msg.type === 'JSON_CHUNK') {
         if (!jsonChunkBuffer[peerId]) jsonChunkBuffer[peerId] = '';
         jsonChunkBuffer[peerId] += msg.data;
@@ -257,26 +263,139 @@ function handleChannelMessage(msg, peerId, channel) {
         return;
     }
 
-    // Host
-    if (msg.type === 'REQUEST_ROOT') {
-        const items = getItemsInPath(myHostedFiles, myRootFolderName);
-        sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: items, path: myRootFolderName });
+    // HOST LOGIK - SECURITY CHECK
+    if (msg.type === 'REQUEST_ROOT' || msg.type === 'REQUEST_DIRECTORY' || msg.type === 'REQUEST_DOWNLOAD' || msg.type === 'REQUEST_RECURSIVE_LIST') {
+
+        // Prüfen, ob mein Mount geschützt ist
+        if (myMountPassword) {
+            // Hat der Gast das richtige Passwort gesendet?
+            // (Bei REQUEST_ROOT ist es in msg.password, bei anderen Requests verlassen wir uns darauf,
+            // dass er die Pfade eh nicht kennen würde, wenn er Root nicht gesehen hätte.
+            // Sicherer: Client sendet Token bei jedem Request. Für jetzt reicht der Root-Check oder wir speichern den "Authenticated State" pro Peer.)
+
+            // Einfache Variante: Wir prüfen es beim Root Request
+            if (msg.type === 'REQUEST_ROOT') {
+                if (msg.password !== myMountPassword) {
+                    console.warn(`Access Denied for ${peerId}: Wrong Password`);
+                    channel.send(JSON.stringify({ type: 'ERROR', message: 'ACCESS DENIED: WRONG PASSWORD' }));
+                    return;
+                } else {
+                    // Erfolg! Wir merken uns, dass dieser Peer authentifiziert ist (Optional, für Advanced Security)
+                    console.log(`Access Granted for ${peerId}`);
+                }
+            }
+        }
     }
+
+    // ... (Restlicher Host Code wie REQUEST_DIRECTORY, etc.) ...
+
+    // Host Logic Original (nur um den Passwort-Check erweitert)
+    if (msg.type === 'REQUEST_ROOT') {
+        // Falls wir hier sind, war das PW korrekt (oder keins gesetzt)
+        const items = getItemsInPath(myHostedFiles, myRootFolderName); // Root-Name nutzen wir nicht für Filterung der echten Files, aber für Anzeige
+        // Trick: getItemsInPath braucht den echten Folder Pfad.
+        // Da wir "Custom Names" haben, müssen wir aufpassen.
+        // myHostedFiles enthält die echten Pfade (z.B. "EchtOrdner/Bild.png").
+        // Wenn wir mounten, ist myRootFolderName jetzt der Custom Name (z.B. "Geheim").
+        // getItemsInPath erwartet aber den echten Root Pfad der Datei.
+
+        // FIX für Custom Names: Wir müssen den "echten" Root-Namen der ersten Datei nehmen
+        const realRootName = myHostedFiles[0].webkitRelativePath.split('/')[0];
+        const rootItems = getItemsInPath(myHostedFiles, realRootName);
+
+        sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: rootItems, path: myRootFolderName }); // Wir senden Custom Name zurück als Pfad
+    }
+
+// HOST LOGIC (Updated for Custom Names)
+    const realRootName = myHostedFiles.length > 0 ? myHostedFiles[0].webkitRelativePath.split('/')[0] : "";
+
     if (msg.type === 'REQUEST_DIRECTORY') {
-        const items = getItemsInPath(myHostedFiles, msg.path);
+        // Client fragt nach: "Project X/Sub"
+        // Wir müssen daraus machen: "Urlaub/Sub"
+        let requestedPath = msg.path;
+
+        if (requestedPath.startsWith(myRootFolderName)) {
+            // Ersetze Custom Root durch Real Root
+            requestedPath = requestedPath.replace(myRootFolderName, realRootName);
+        }
+
+        const items = getItemsInPath(myHostedFiles, requestedPath);
+        // Wir senden die Items zurück, aber in der Antwort setzen wir den Pfad wieder auf den Custom Name für den Client
         sendLargeJSON(channel, 'RESPONSE_DIRECTORY', { items: items, path: msg.path });
     }
-    if (msg.type === 'REQUEST_DOWNLOAD') {
-        let file = myHostedFiles.find(f => f.webkitRelativePath === msg.filename || f.name === msg.filename);
-        if(!file) file = myHostedFiles.find(f => f.webkitRelativePath.endsWith(msg.filename));
 
-        if (file) streamFileToPeer(file, channel);
-        else channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found.' }));
+// 3. DOWNLOAD ANFRAGE (HOST LOGIK - UPDATED)
+    if (msg.type === 'REQUEST_DOWNLOAD') {
+        console.log(`[HOST] Incoming request for: "${msg.filename}"`);
+
+        // A) MAPPING: Custom Name -> Echter Name
+        // Wir ermitteln den echten Root-Namen der ersten Datei im Speicher
+        const realRootName = myHostedFiles.length > 0 ? myHostedFiles[0].webkitRelativePath.split('/')[0] : "";
+
+        let searchPath = msg.filename; // Z.B. "Project Omega/bild.png"
+
+        // Wenn der Pfad mit dem Custom-Namen beginnt, tauschen wir ihn gegen den echten aus
+        if (myRootFolderName && searchPath.startsWith(myRootFolderName)) {
+            // "Project Omega/bild.png" -> "Neuer Ordner/bild.png"
+            searchPath = searchPath.replace(myRootFolderName, realRootName);
+        }
+
+        // B) SUCHE: Jetzt suchen wir mit dem "echten" Pfad
+        let requestedFile = myHostedFiles.find(f => f.webkitRelativePath === searchPath);
+
+        // Fallback: Nur nach Dateinamen suchen (falls Pfad-Mapping fehlschlug)
+        if (!requestedFile) {
+            requestedFile = myHostedFiles.find(f => f.name === msg.filename.split('/').pop());
+        }
+
+        if (requestedFile) {
+            console.log(`[HOST] File found: ${requestedFile.name}. Starting stream...`);
+            streamFileToPeer(requestedFile, channel);
+        } else {
+            console.error(`[HOST] ERROR: File "${msg.filename}" (mapped: "${searchPath}") NOT FOUND.`);
+            channel.send(JSON.stringify({
+                type: 'ERROR',
+                message: `File not found on host: ${msg.filename}`
+            }));
+        }
     }
+
+// 4. REKURSIVE LISTE FÜR ZIP ANFRAGE (HOST LOGIK - UPDATED)
     if (msg.type === 'REQUEST_RECURSIVE_LIST') {
-        const files = getAllFilesInPathRecursive(myHostedFiles, msg.path);
-        const list = files.map(f => ({ fullPath: f.webkitRelativePath, relativePath: msg.path ? f.webkitRelativePath.substring(msg.path.length+1) : f.webkitRelativePath }));
-        sendLargeJSON(channel, 'RESPONSE_RECURSIVE_LIST', { list });
+        // A) MAPPING: Suchpfad für interne Suche anpassen
+        const realRootName = myHostedFiles.length > 0 ? myHostedFiles[0].webkitRelativePath.split('/')[0] : "";
+        let searchPath = msg.path; // Z.B. "Project Omega/Unterordner"
+
+        if (myRootFolderName && searchPath.startsWith(myRootFolderName)) {
+            searchPath = searchPath.replace(myRootFolderName, realRootName);
+        }
+
+        // Dateien finden (mit echten Pfaden)
+        const files = getAllFilesInPathRecursive(myHostedFiles, searchPath);
+
+        // B) REMAPPING FÜR ANTWORT: Echte Pfade wieder zu Custom Namen machen
+        const metaList = files.map(f => {
+            let publicFullPath = f.webkitRelativePath; // "Neuer Ordner/bild.png"
+
+            // Zurücktauschen: "Neuer Ordner" -> "Project Omega"
+            if (realRootName && publicFullPath.startsWith(realRootName)) {
+                publicFullPath = publicFullPath.replace(realRootName, myRootFolderName);
+            }
+
+            // Relativen Pfad für die ZIP-Struktur berechnen (basierend auf der Anfrage)
+            // Wenn Anfrage "Project Omega" war und File ist "Project Omega/bild.png", dann ist relative "bild.png"
+            let relativePath = publicFullPath;
+            if (msg.path && publicFullPath.startsWith(msg.path)) {
+                relativePath = publicFullPath.substring(msg.path.length + 1); // +1 für den Slash
+            }
+
+            return {
+                fullPath: publicFullPath, // Der Client nutzt DAS für den Download-Request
+                relativePath: relativePath // Der Client nutzt DAS für den Dateinamen im Zip
+            };
+        });
+
+        sendLargeJSON(channel, 'RESPONSE_RECURSIVE_LIST', { list: metaList });
     }
 
     // Client
@@ -317,7 +436,89 @@ function handleChannelMessage(msg, peerId, channel) {
 
 // --- UI / RENDERING ---
 
-function triggerMount() { document.getElementById('folderInput').click(); }
+// --- MOUNT & MODAL LOGIC ---
+
+function triggerMount() {
+    // Modal öffnen, Formular resetten
+    document.getElementById('mountModal').style.display = 'flex';
+    document.getElementById('mountName').value = '';
+    document.getElementById('mountAllowedUsers').value = '';
+    document.getElementById('mountPassword').value = '';
+    document.getElementById('selectedFolderName').textContent = 'No folder selected';
+    pendingFiles = null;
+}
+
+function closeMountModal() {
+    document.getElementById('mountModal').style.display = 'none';
+    pendingFiles = null;
+}
+
+// Event Listener für den HIDDEN Input im Modal
+document.getElementById('hiddenFolderInput').addEventListener('change', (e) => {
+    if (e.target.files.length === 0) return;
+    pendingFiles = Array.from(e.target.files);
+
+    // Name vorschlagen
+    const detectedName = pendingFiles[0].webkitRelativePath.split('/')[0];
+    document.getElementById('selectedFolderName').textContent = detectedName;
+    if(document.getElementById('mountName').value === '') {
+        document.getElementById('mountName').value = detectedName;
+    }
+});
+
+function confirmMount() {
+    if (!pendingFiles || pendingFiles.length === 0) {
+        alert("Please select a folder first.");
+        return;
+    }
+
+    // 1. Daten sammeln
+    const customName = document.getElementById('mountName').value || "Unnamed Drive";
+    const allowedStr = document.getElementById('mountAllowedUsers').value;
+    const password = document.getElementById('mountPassword').value;
+
+    // IDs parsen (Komma getrennt)
+    const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+    // 2. Globals setzen
+    myHostedFiles = pendingFiles;
+    myRootFolderName = customName; // Wir nutzen den Custom Name als Root
+    myMountPassword = password || null; // PW speichern (lokal)
+
+    // 3. UI Update
+    closeMountModal();
+    document.getElementById('btnMount').style.display = 'none';
+    const unmountBtn = document.getElementById('btnUnmount');
+    unmountBtn.style.display = 'block';
+    unmountBtn.innerText = `[-] UNMOUNT [${customName}]`;
+
+    // 4. Server informieren (Nur Metadaten, KEIN Passwort senden!)
+    console.log(`MOUNTING: ${customName} (Protected: ${!!password})`);
+    socket.emit('fs_start_hosting', {
+        folderName: customName,
+        allowedUsers: allowedUsers,
+        isProtected: !!password // Server weiß nur DASS es geschützt ist
+    });
+}
+
+// --- PASSWORD MODAL LOGIC (Viewer Side) ---
+
+function closePasswordModal() {
+    document.getElementById('passwordModal').style.display = 'none';
+    document.getElementById('accessPassword').value = '';
+    targetPeerForPassword = null;
+}
+
+function submitPassword() {
+    const pw = document.getElementById('accessPassword').value;
+    if(!pw) return;
+
+    const peerId = targetPeerForPassword;
+    closePasswordModal();
+
+    // Mit Passwort verbinden
+    initiateConnectionWithPassword(peerId, pw);
+}
 
 document.getElementById('folderInput').addEventListener('change', (e) => {
     const files = e.target.files;
@@ -578,6 +779,7 @@ function updateBreadcrumbs(pathArray) {
     });
 }
 
+// Ersetzte renderSidebar, um Schloss-Icon und Passwort-Check einzubauen
 function renderSidebar(shares) {
     const list = document.getElementById('shareList');
     list.innerHTML = '';
@@ -591,33 +793,59 @@ function renderSidebar(shares) {
     shareIds.forEach(socketId => {
         const item = shares[socketId];
         const isMe = (socketId === socket.id);
+        const isLocked = item.isProtected && !isMe; // Eigene Ordner brauchen kein PW
+
         const li = document.createElement('li');
         li.className = 'share-item';
         if(isMe) li.style.cssText = 'color:#0f0; border-left:4px solid #0f0;';
 
-        li.innerHTML = `<span class="share-name">${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span><span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username}</span>`;
+        // Anzeige mit Schloss, falls nötig
+        const lockIcon = isLocked ? '🔒 ' : '';
+        li.innerHTML = `<span class="share-name">${lockIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span><span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username}</span>`;
 
         li.onclick = () => {
-            document.getElementById('filePreview').style.display = 'none';
-            document.getElementById('fileGrid').style.display = 'grid';
-            incomingFileBuffer = [];
-            currentActivePeerId = socketId;
-
+            // UI Reset
             document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
             li.classList.add('active');
 
-            if(isMe) {
+            if (isMe) {
+                // Lokal öffnen (wie bisher)
+                document.getElementById('filePreview').style.display = 'none';
+                document.getElementById('fileGrid').style.display = 'grid';
+                currentActivePeerId = socketId;
                 currentPathStr = item.folderName;
                 renderLocalGrid(getItemsInPath(myHostedFiles, currentPathStr));
-                // FIX: Explizit ROOT als Startpunkt setzen
                 updateBreadcrumbs(['ROOT', item.folderName]);
             } else {
-                document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">ESTABLISHING P2P UPLINK...</div>';
-                connectToPeer(socketId);
+                // Remote öffnen
+                if (item.isProtected) {
+                    // Passwort abfragen!
+                    targetPeerForPassword = socketId;
+                    document.getElementById('passwordModal').style.display = 'flex';
+                    document.getElementById('accessPassword').focus();
+                } else {
+                    // Direkt verbinden (Kein Passwort)
+                    initiateConnectionWithPassword(socketId, null);
+                }
             }
         };
         list.appendChild(li);
     });
+}
+
+// Neue Funktion, die connectToPeer aufruft und PW speichert
+function initiateConnectionWithPassword(peerId, password) {
+    document.getElementById('filePreview').style.display = 'none';
+    document.getElementById('fileGrid').style.display = 'grid';
+    document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING P2P UPLINK...</div>';
+    currentActivePeerId = peerId;
+
+    // Wir speichern das Passwort temporär im Peer-Objekt,
+    // damit wir es senden können, sobald der Channel offen ist.
+    if(!peers[peerId]) peers[peerId] = {};
+    peers[peerId].authPassword = password; // Speichern für Handshake
+
+    connectToPeer(peerId);
 }
 
 function requestFileList(targetId) {

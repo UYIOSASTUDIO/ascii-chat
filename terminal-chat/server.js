@@ -108,6 +108,7 @@ let deadDrops = {};
 
 let activeShares = {};
 
+
 // Hilfsfunktion: Verbindung sauber trennen
 function disconnectPartner(userId) {
     const user = users[userId];
@@ -2546,19 +2547,15 @@ io.on('connection', (socket) => {
 
     // 1. User kündigt Share an
     socket.on('fs_start_hosting', (data) => {
-        // data: { folderName: "MeinOrdner" }
-        const user = users[socket.id];
-        if (!user) return;
-
+        // data enthält jetzt: folderName, allowedUsers (array), isProtected (bool)
         activeShares[socket.id] = {
+            username: socket.username || 'Unknown', // Falls du Username im Socket speicherst
+            key: socket.id.substr(0, 5),
             folderName: data.folderName,
-            username: user.username,
-            key: user.key,
-            socketId: socket.id
+            allowedUsers: data.allowedUsers || [], // Array von Socket-IDs oder leer für alle
+            isProtected: data.isProtected || false
         };
-
-        // Update an ALLE senden
-        io.emit('fs_update_shares', activeShares);
+        broadcastShares();
     });
 
     // 2. User stoppt Share
@@ -2578,6 +2575,43 @@ io.on('connection', (socket) => {
         }
         // ... dein alter Disconnect Code ...
     });
+
+    // INTELLIGENTES BROADCASTING (Sichtbarkeit filtern)
+    function broadcastShares() {
+        const connectedSockets = io.sockets.sockets; // Map aller Sockets
+
+        // Wir gehen durch jeden verbundenen Nutzer und bauen ihm seine individuelle Liste
+        connectedSockets.forEach((recipientSocket) => {
+            const sharesVisibleToUser = {};
+
+            Object.keys(activeShares).forEach(hostId => {
+                const share = activeShares[hostId];
+
+                // Regel 1: Ich sehe meine eigenen Shares
+                if (hostId === recipientSocket.id) {
+                    sharesVisibleToUser[hostId] = share;
+                    return;
+                }
+
+                // Regel 2: Wenn allowedUsers leer ist -> Für alle sichtbar
+                if (!share.allowedUsers || share.allowedUsers.length === 0) {
+                    sharesVisibleToUser[hostId] = share;
+                    return;
+                }
+
+                // Regel 3: Steht meine ID (recipientSocket.id) in der allowed Liste?
+                // Wir prüfen auch auf Substrings, falls User nur kurze IDs eingeben
+                const isAllowed = share.allowedUsers.some(allowedId => recipientSocket.id.includes(allowedId));
+
+                if (isAllowed) {
+                    sharesVisibleToUser[hostId] = share;
+                }
+            });
+
+            // Sende die gefilterte Liste an diesen Nutzer
+            recipientSocket.emit('fs_update_shares', sharesVisibleToUser);
+        });
+    }
 
     // 4. Neuer User kommt rein -> Liste anfordern
     socket.on('fs_request_update', () => {

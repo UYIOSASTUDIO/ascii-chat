@@ -24,7 +24,6 @@
             <button id="btnUnmount" class="btn-mount btn-danger" onclick="unmountDrive()" style="display:none;">
                 [-] UNMOUNT DRIVE
             </button>
-            <input type="file" id="folderInput" webkitdirectory directory multiple hidden>
         </div>
 
         <div class="sidebar-header">NETWORK DRIVES</div>
@@ -63,6 +62,51 @@
         </div>
     </section>
 
+</div>
+
+<div id="mountModal" class="modal-overlay" style="display:none;">
+    <div class="modal-window">
+        <h3>MOUNT CONFIGURATION</h3>
+
+        <div class="form-group">
+            <label>DISPLAY NAME:</label>
+            <input type="text" id="mountName" placeholder="e.g. Project Omega">
+        </div>
+
+        <div class="form-group">
+            <label>ALLOWED USERS (IDs comma separated, empty = ALL):</label>
+            <input type="text" id="mountAllowedUsers" placeholder="ID1, ID2...">
+        </div>
+
+        <div class="form-group">
+            <label>PASSWORD PROTECTION (Optional):</label>
+            <input type="password" id="mountPassword" placeholder="Leave empty for no password">
+        </div>
+
+        <div class="form-group">
+            <label>SELECT FOLDER:</label>
+            <button class="btn-action" onclick="document.getElementById('hiddenFolderInput').click()">[ CHOOSE FOLDER ]</button>
+            <span id="selectedFolderName" style="margin-left:10px; color:#555;">No folder selected</span>
+            <input type="file" id="hiddenFolderInput" webkitdirectory directory multiple hidden>
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn-mount btn-danger" onclick="closeMountModal()">CANCEL</button>
+            <button class="btn-mount" onclick="confirmMount()">[ MOUNT DRIVE ]</button>
+        </div>
+    </div>
+</div>
+
+<div id="passwordModal" class="modal-overlay" style="display:none;">
+    <div class="modal-window">
+        <h3>SECURE FOLDER ACCESS</h3>
+        <p>This drive is password protected.</p>
+        <input type="password" id="accessPassword" placeholder="Enter Password">
+        <div class="modal-actions">
+            <button class="btn-mount btn-danger" onclick="closePasswordModal()">CANCEL</button>
+            <button class="btn-mount" onclick="submitPassword()">[ UNLOCK ]</button>
+        </div>
+    </div>
 </div>
 
 <script src="./jszip.min.js"></script>
