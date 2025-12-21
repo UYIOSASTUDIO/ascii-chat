@@ -1201,7 +1201,7 @@ io.on('connection', (socket) => {
         const groupId = parseInt(data.groupId);
         const limit = parseInt(data.limit) || 0; // 0 = Unendlich
 
-        const group = activeGroups[groupId];
+        const group = privateGroups[groupId];
         if (!group) return socket.emit('system_message', 'ERROR: Group not found.');
 
         // Rechte Check: Nur Owner oder Mod
@@ -1277,7 +1277,7 @@ io.on('connection', (socket) => {
 
         // JETZT: Normale Join-Logik anstoßen
         // Wir rufen quasi die Join-Funktion intern auf
-        const group = activeGroups[link.groupId];
+        const group = privateGroups[link.groupId];
 
         // 1. Check: Bereits drin?
         if (group.members.includes(socket.id) || group.mods.includes(socket.id) || group.owner === socket.id) {
