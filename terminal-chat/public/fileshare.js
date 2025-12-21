@@ -52,11 +52,36 @@ if(!user) {
 console.log(`SYSTEM: Initialized for user ${user}`);
 
 // --- SOCKET EVENTS ---
+// --- SOCKET EVENTS ---
 socket.on('connect', () => {
     console.log("Connected to File System Network");
-    if (localStorage.getItem('fs_username')) {
-        socket.emit('fs_login', { username: localStorage.getItem('fs_username'), key: localStorage.getItem('fs_key') });
+
+    // Username holen
+    const storedUser = localStorage.getItem('fs_username');
+    const storedKey = localStorage.getItem('fs_key');
+
+    // NEU: Gruppen aus LocalStorage holen
+    // Wir gehen davon aus, dass dein Chat die Gruppen als JSON-String speichert
+    // Beispiel im LocalStorage: key="fs_groups", value="['TeamAlpha', 'Devs']"
+    let myGroups = [];
+    try {
+        const storedGroups = localStorage.getItem('fs_groups');
+        if (storedGroups) {
+            myGroups = JSON.parse(storedGroups);
+        }
+    } catch (e) {
+        console.warn("Could not parse groups from localStorage", e);
     }
+
+    if (storedUser) {
+        // WICHTIG: Wir senden jetzt 'groups' mit!
+        socket.emit('fs_login', {
+            username: storedUser,
+            key: storedKey,
+            groups: myGroups
+        });
+    }
+
     socket.emit('fs_request_update');
 });
 
@@ -1093,3 +1118,34 @@ async function finalizeRemoteZip(){
     document.getElementById('btnZipDownload').textContent="[ DONE ]"; setTimeout(()=>document.getElementById('btnZipDownload').textContent="[ DOWNLOAD ZIP ]", 2000);
 }
 function renderSidebarMock(){ }
+
+// --- STORAGE SYNC (Chat <-> Fileshare) ---
+
+// Hört darauf, wenn der Chat (in einem anderen Tab) die Gruppen ändert
+window.addEventListener('storage', (event) => {
+    if (event.key === 'fs_groups') {
+        console.log("[SYNC] Groups changed in Chat! Updating permissions...");
+
+        // 1. Neue Gruppen lesen
+        let newGroups = [];
+        try { newGroups = JSON.parse(event.newValue); } catch(e){}
+
+        // 2. Server informieren (Re-Login mit neuen Gruppen)
+        const storedUser = localStorage.getItem('fs_username');
+        const storedKey = localStorage.getItem('fs_key');
+
+        if (storedUser) {
+            socket.emit('fs_login', {
+                username: storedUser,
+                key: storedKey,
+                groups: newGroups // Die neuen Gruppen senden!
+            });
+        }
+
+        // 3. Wenn das Mount-Modal offen ist, Liste sofort aktualisieren
+        const groupContainer = document.getElementById('groupListContainer');
+        if (document.getElementById('mountModal').style.display === 'flex' && groupContainer) {
+            socket.emit('fs_request_groups'); // Fragt die neuen Gruppen für die Anzeige ab
+        }
+    }
+});

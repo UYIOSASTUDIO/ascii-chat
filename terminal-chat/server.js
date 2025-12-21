@@ -149,25 +149,24 @@ io.on('connection', (socket) => {
     serverLog(`Neue Verbindung (Socket) hergestellt.`);
 
     // --- FILE SYSTEM AUTHENTIFIZIERUNG ---
+// --- LOGIN HANDLER ---
     socket.on('fs_login', (data) => {
-        // data: { username, key }
+        socket.username = data.username;
+        console.log(`[LOGIN] User: ${socket.username} (ID: ${socket.id})`);
 
-        // Wir erstellen einen "Light"-User Eintrag für diesen Socket
-        // Damit funktionieren Befehle wie fs_start_hosting
-        users[socket.id] = {
-            id: socket.id,
-            username: data.username,
-            key: data.key || 'FS-CLIENT', // Fallback
-            isAdmin: false, // Sicherheitshalber false, oder logik implementieren
-            isGhost: false,
-            currentGroup: null
-        };
+        // NEU: Gruppen beitreten!
+        // Der Client schickt uns eine Liste von Gruppen, in die er rein will
+        if (data.groups && Array.isArray(data.groups)) {
+            data.groups.forEach(groupName => {
+                socket.join(groupName);
+                console.log(`   -> Joined Room: ${groupName}`);
+            });
+        }
 
-        console.log(`FS-CLIENT registriert: ${data.username} (${socket.id})`);
-
+        // Name in aktiven Shares updaten (falls vorhanden)
         if (activeShares[socket.id]) {
             activeShares[socket.id].username = socket.username;
-            broadcastShares(); // Update an alle schicken
+            broadcastShares();
         }
     });
 

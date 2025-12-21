@@ -415,6 +415,7 @@ function getSystemStats() {
 }
 
 async function runBootSequence() {
+    localStorage.removeItem('fs_groups');
     input.disabled = true;
     promptSpan.style.opacity = '0';
     const stats = getSystemStats();
@@ -1422,6 +1423,8 @@ socket.on('group_joined_success', async (data) => {
     }
     // -----------------------------------
 
+    updateLocalGroups(data.id, 'add');
+
     let key = data.key ? await importRoomKey(data.key) : null;
     const name = data.name || `Group_${data.id}`;
 
@@ -1538,15 +1541,26 @@ socket.on('group_owner_leave_dialog', () => {
 });
 
 // Event wenn man erfolgreich raus ist (zum Resetten)
+// Event wenn man erfolgreich raus ist (zum Resetten)
 socket.on('group_left_success', () => {
     // Falls wir gerade entschieden haben, State resetten
     if (appState === 'DECIDING_GROUP_EXIT') {
         appState = 'IDLE';
     }
-    // Chat löschen
+
+    // Wir ermitteln die ID der Gruppe, die wir gerade verlassen
     const currentGroupId = Object.keys(myChats).find(k => myChats[k].type === 'group' && activeChatId === k);
-    if (currentGroupId) deleteChat(currentGroupId);
-    else if (activeChatId !== 'LOCAL') switchChat('LOCAL');
+
+    if (currentGroupId) {
+        // --- NEU: Zuerst aus dem Speicher entfernen! ---
+        updateLocalGroups(currentGroupId, 'remove');
+        // -----------------------------------------------
+
+        deleteChat(currentGroupId);
+    }
+    else if (activeChatId !== 'LOCAL') {
+        switchChat('LOCAL');
+    }
 });
 
 // EVENT: GRUPPEN-NAME GEÄNDERT
@@ -1677,6 +1691,9 @@ socket.on('pub_joined_success', async (data) => {
 
 // FORCED GROUP DELETION (Wenn Owner schließt)
 socket.on('group_dissolved', (groupId) => {
+
+    updateLocalGroups(groupId, 'remove');
+
     // 1. Nachricht anzeigen (falls User gerade hinschaut)
     // Wir nutzen printToChat direkt, falls der Chat noch existiert
     if (myChats[groupId]) {
@@ -1749,6 +1766,8 @@ socket.on('group_list_result', (data) => {
 // MAN WURDE GEKICKT (Local Shell Nachricht)
 socket.on('group_kicked_notification', (data) => {
     // data: { groupName, groupId, reason, kickerName }
+
+    updateLocalGroups(data.groupId, 'remove');
 
     // 1. Gruppe sofort löschen und UI wechseln
     deleteChat(data.groupId);
@@ -2317,6 +2336,26 @@ function handleFiles(files) {
             metadata: { name: f.name, size: f.size }
         });
     });
+}
+
+// --- HELPER: Gruppen im Browser speichern ---
+function updateLocalGroups(groupName, action) {
+    let currentGroups = [];
+    try {
+        const stored = localStorage.getItem('fs_groups');
+        if (stored) currentGroups = JSON.parse(stored);
+    } catch (e) { console.error(e); }
+
+    if (action === 'add') {
+        if (!currentGroups.includes(groupName)) {
+            currentGroups.push(groupName);
+        }
+    } else if (action === 'remove') {
+        currentGroups = currentGroups.filter(g => g !== groupName);
+    }
+
+    localStorage.setItem('fs_groups', JSON.stringify(currentGroups));
+    console.log(`[STORAGE] Groups updated:`, currentGroups);
 }
 
 function setupDataChannelEvents(fileToSend) {
