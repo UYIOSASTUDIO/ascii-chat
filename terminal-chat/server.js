@@ -707,7 +707,7 @@ io.on('connection', (socket) => {
         socket.emit('pub_left_success');
     });
 
-    // 3. RAUM BEITRETEN (Multi-Chat Fix: Kein Kickout mehr!)
+// 3. RAUM BEITRETEN (Multi-Chat Fix: Kein Kickout mehr!)
     socket.on('pub_join', (roomId) => {
         const room = publicRooms[roomId];
         const user = users[socket.id];
@@ -717,12 +717,26 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // --- HIER HABEN WIR DEN CODE GELÖSCHT, DER PRIVATE CHATS TRENNT ---
-        // (Der alte if (user.partners...) Block ist weg)
+        // --- FIX: BEREITS DRIN CHECK ---
+        // Wir prüfen, ob deine ID schon in der Liste ist
+        if (room.members.includes(socket.id)) {
+            socket.emit('system_message', `INFO: Connection to Sector #${roomId} is already active.`);
+            return; // WICHTIG: Hier brechen wir ab! Keine Broadcasts, kein Join-Logik.
+        }
+        // -------------------------------
+
+        // Falls man woanders war: Alten Public Room sauber verlassen (Optional, aber sauberer)
+        if (user.currentPub && user.currentPub !== roomId) {
+            const oldRoom = publicRooms[user.currentPub];
+            if (oldRoom) {
+                socket.leave(`pub_${user.currentPub}`);
+                oldRoom.members = oldRoom.members.filter(id => id !== socket.id);
+                // Optional: Leave Nachricht im alten Raum senden
+            }
+        }
 
         // Socket.io Room beitreten
         socket.join(`pub_${roomId}`);
-
         room.members.push(socket.id);
 
         // Status im User-Objekt updaten
@@ -736,7 +750,7 @@ io.on('connection', (socket) => {
             key: room.key
         });
 
-        // Statt Text senden wir ein Event mit Key
+        // Broadcast an andere
         socket.to(`pub_${roomId}`).emit('room_user_status', {
             username: user.username,
             key: user.key,
@@ -1197,25 +1211,25 @@ io.on('connection', (socket) => {
 
     // --- GRUPPEN LINK ERSTELLEN ---
     socket.on('group_create_link_req', (data) => {
-        // data: { groupId, limit (optional) }
+        const user = users[socket.id]; // User holen für Context-Check
+        if (!user) return;
+
         const groupId = parseInt(data.groupId);
-        const limit = parseInt(data.limit) || 0; // 0 = Unendlich
+        const limit = parseInt(data.limit) || 0;
 
         const group = privateGroups[groupId];
+
         if (!group) return socket.emit('system_message', 'ERROR: Group not found.');
 
-        // Rechte Check: Nur Owner oder Mod
-        const isOwner = group.owner === socket.id;
+        const isOwner = group.ownerId === socket.id;
         const isMod = group.mods.includes(socket.id);
 
         if (!isOwner && !isMod) {
             return socket.emit('system_message', 'DENIED: Only Owner or Mods can create invite links.');
         }
 
-        // Link ID generieren (Zufällig)
         const linkId = Math.random().toString(36).substr(2, 9);
 
-        // Link speichern
         activeGroupLinks[linkId] = {
             groupId: groupId,
             limit: limit,
@@ -1223,28 +1237,38 @@ io.on('connection', (socket) => {
             creator: socket.username
         };
 
-        // Nachricht an den aktuellen Raum senden (wo der Befehl getippt wurde)
-        // Wir nutzen 'io.to', aber wir müssen wissen, wo der User gerade tippt.
-        // Da der User im Client /group link tippt, ist er im Kontext 'socket.room' (falls du das trackst)
-        // ODER wir senden es an alle User im aktuellen Chat-Raum.
-
-        // Da dein Chat-System auf Client-Side "activeChatId" basiert, müssen wir tricksen:
-        // Wir senden das Event an alle im Raum, in dem der User *gerade sendet*.
-        // Wir gehen davon aus, dass du beim Tippen die 'currentChatId' mitsendest?
-        // NEIN, wir machen es einfacher: Der Client sendet die `targetRoomId` mit.
-
-        // KORREKTUR: Wir brauchen die targetRoomId vom Client.
         if (data.targetRoomId) {
-            io.to(data.targetRoomId).emit('group_link_display', {
+            // --- FIX: DAS RICHTIGE ZIEL ERMITTELN ---
+            let socketIoRoom = data.targetRoomId;
+
+            // 1. Ist das Ziel meine aktuelle Gruppe? -> Prefix 'group_'
+            if (user.currentGroup && user.currentGroup == data.targetRoomId) {
+                socketIoRoom = `group_${data.targetRoomId}`;
+            }
+            // 2. Ist das Ziel mein aktueller Public Room? -> Prefix 'pub_'
+            else if (user.currentPub && user.currentPub == data.targetRoomId) {
+                socketIoRoom = `pub_${data.targetRoomId}`;
+            }
+            // 3. Ist das Ziel ein Privater Chat (User Key)? -> Socket ID suchen
+            else {
+                const partner = Object.values(users).find(u => u.key === data.targetRoomId);
+                if (partner) {
+                    socketIoRoom = partner.id; // An die Socket ID senden
+                }
+            }
+
+            // An den korrekten Raum senden
+            io.to(socketIoRoom).emit('group_link_display', {
                 linkId: linkId,
                 groupId: groupId,
                 groupName: group.name,
                 creator: socket.username,
                 limit: limit,
                 isProtected: !!group.password,
-                isPrivate: group.isPrivate
+                isPrivate: !group.isPublic
             });
 
+            // Bestätigung an den Ersteller (dich)
             socket.emit('system_message', `Link created for Group ${groupId}. Limit: ${limit === 0 ? '∞' : limit}`);
         }
     });
