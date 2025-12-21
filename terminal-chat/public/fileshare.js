@@ -211,14 +211,12 @@ function submitPassword() {
 // --- UI LOGIC ---
 
 function renderSidebar(shares) {
-    // Falls keine Shares übergeben wurden, nutzen wir die globale Liste (für Suche)
     const dataToRender = shares || latestSharesList;
-    latestSharesList = dataToRender; // Update global cache
+    latestSharesList = dataToRender;
 
     const list = document.getElementById('shareList');
     list.innerHTML = '';
 
-    // Suche anwenden
     const searchTerm = document.getElementById('driveSearch').value.toLowerCase();
     const allIds = Object.keys(dataToRender);
 
@@ -244,9 +242,8 @@ function renderSidebar(shares) {
         if (socketId === currentActivePeerId) li.classList.add('active');
         if (isMe) li.style.cssText += 'color:#0f0; border-left:4px solid #0f0;';
 
-        // ICONS: Schloss + (Datei ODER Ordner)
         const lockIcon = isLocked ? '🔒 ' : '';
-        const typeIcon = item.isSingleFile ? '📄 ' : '📁 '; // <--- NEUE UNTERSCHEIDUNG
+        const typeIcon = item.isSingleFile ? '📄 ' : '📁 ';
         const idDisplay = `<span style="font-size:0.7em; color:#444;">[ID: ${socketId.substr(0,5)}]</span>`;
 
         li.innerHTML = `
@@ -259,23 +256,36 @@ function renderSidebar(shares) {
             li.classList.add('active');
 
             if (isMe) {
-                document.getElementById('filePreview').style.display = 'none';
-                document.getElementById('fileGrid').style.display = 'grid';
+                // LOCAL LOGIC
                 currentActivePeerId = socketId;
                 currentPathStr = item.folderName;
-                renderLocalGrid(getMappedLocalItems(currentPathStr));
-                updateBreadcrumbs(['ROOT', item.folderName]);
+
+                if (item.isSingleFile) {
+                    // DIREKT ÖFFNEN (Lokal)
+                    // Bei SingleFile ist myHostedFiles[0] die Datei
+                    openFile(myHostedFiles[0]);
+                } else {
+                    // ORDNER ÖFFNEN
+                    document.getElementById('filePreview').style.display = 'none';
+                    document.getElementById('fileGrid').style.display = 'grid';
+                    renderLocalGrid(getMappedLocalItems(currentPathStr));
+                    updateBreadcrumbs(['ROOT', item.folderName]);
+                }
             } else {
+                // REMOTE LOGIC
+                // Wir übergeben jetzt das ganze Item, damit wir wissen ob es ein SingleFile ist
                 if (item.isProtected) {
                     if (knownPasswords[socketId]) {
-                        initiateConnectionWithPassword(socketId, knownPasswords[socketId]);
+                        initiateConnectionWithPassword(socketId, knownPasswords[socketId], item);
                     } else {
                         targetPeerForPassword = socketId;
+                        // Zwischenspeichern des Items für später (nach Passworteingabe)
+                        peers[socketId] = { ...peers[socketId], pendingItemInfo: item };
                         document.getElementById('passwordModal').style.display = 'flex';
                         document.getElementById('accessPassword').focus();
                     }
                 } else {
-                    initiateConnectionWithPassword(socketId, null);
+                    initiateConnectionWithPassword(socketId, null, item);
                 }
             }
         };
@@ -283,37 +293,60 @@ function renderSidebar(shares) {
     });
 }
 
-function initiateConnectionWithPassword(peerId, password) {
-    document.getElementById('filePreview').style.display = 'none';
-    document.getElementById('fileGrid').style.display = 'grid';
+// Signatur geändert: itemInfo hinzugefügt
+function initiateConnectionWithPassword(peerId, password, itemInfo = null) {
     currentActivePeerId = peerId;
 
-    // Speichern, falls es direkt über Sidebar kam
-    if(password) knownPasswords[peerId] = password;
+    // Falls wir das Item nicht direkt bekommen haben (z.B. via Password Modal), holen wir es aus pending
+    if (!itemInfo && peers[peerId]?.pendingItemInfo) {
+        itemInfo = peers[peerId].pendingItemInfo;
+    }
 
-    // WICHTIG: Das Passwort holen (entweder frisch eingegeben oder gespeichert)
+    if(password) knownPasswords[peerId] = password;
     const finalPassword = password || knownPasswords[peerId];
 
-    // FIX FÜR HÄNGENBLEIBEN: Ist die Verbindung schon offen?
+    // UI vorbereiten
+    if (itemInfo && itemInfo.isSingleFile) {
+        // PREVIEW MODE aktivieren
+        document.getElementById('fileGrid').style.display = 'none';
+        document.getElementById('filePreview').style.display = 'flex';
+        document.getElementById('previewFileName').textContent = itemInfo.folderName; // Name des Mounts ist Dateiname
+        document.getElementById('previewContent').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:20%;">[ DIRECT LINK ]<br>Requesting Single File...</div>';
+        isPreviewMode = true;
+    } else {
+        // GRID MODE aktivieren
+        document.getElementById('filePreview').style.display = 'none';
+        document.getElementById('fileGrid').style.display = 'grid';
+        document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING...</div>';
+        isPreviewMode = false;
+    }
+
+    // Reuse Connection Check
     const p = peers[peerId];
     if (p && p.channel && p.channel.readyState === 'open') {
-        console.log("Connection already established. Reusing channel.");
-        document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">LOADING DIRECTORY...</div>';
+        console.log("Reusing channel.");
 
-        // Einfach Anfrage senden, statt neu zu verbinden!
-        p.channel.send(JSON.stringify({
-            type: 'REQUEST_ROOT',
-            password: finalPassword
-        }));
+        if (itemInfo && itemInfo.isSingleFile) {
+            // Direkt Datei anfragen
+            p.channel.send(JSON.stringify({
+                type: 'REQUEST_DOWNLOAD',
+                filename: itemInfo.folderName, // Der Mount-Name ist der virtuelle Pfad zur Datei
+                password: finalPassword
+            }));
+        } else {
+            // Root anfragen
+            p.channel.send(JSON.stringify({ type: 'REQUEST_ROOT', password: finalPassword }));
+        }
         return;
     }
 
-    // Wenn nicht verbunden, dann neu verbinden
-    document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING...<br>(Establishing secure P2P Tunnel)</div>';
-
-    // Peer Objekt vorbereiten für Handshake
+    // Neue Verbindung
     if(!peers[peerId]) peers[peerId] = {};
     peers[peerId].authPassword = finalPassword;
+
+    // Wir speichern, was wir öffnen wollen, damit setupChannelHandlers es weiß
+    peers[peerId].targetIsSingleFile = itemInfo ? itemInfo.isSingleFile : false;
+    peers[peerId].targetName = itemInfo ? itemInfo.folderName : "";
 
     connectToPeer(peerId, finalPassword);
 }
@@ -679,9 +712,27 @@ async function processPendingQueue(peerObj, pc) {
 function setupChannelHandlers(channel, peerId, password) {
     channel.onopen = () => {
         console.log(`CHANNEL OPENED with ${peerId}`);
-        // WICHTIG: Password senden
-        channel.send(JSON.stringify({ type: 'REQUEST_ROOT', password: password }));
+
+        // Checken, was wir öffnen wollen (gespeichert in initiateConnection)
+        const isSingle = peers[peerId]?.targetIsSingleFile;
+        const targetName = peers[peerId]?.targetName;
+
+        if (isSingle) {
+            console.log("Requesting Direct Single File...");
+            channel.send(JSON.stringify({
+                type: 'REQUEST_DOWNLOAD',
+                filename: targetName, // MountName = Dateiname
+                password: password
+            }));
+        } else {
+            console.log("Requesting Directory Root...");
+            channel.send(JSON.stringify({
+                type: 'REQUEST_ROOT',
+                password: password
+            }));
+        }
     };
+
     channel.onmessage = (event) => {
         try {
             const msg = JSON.parse(event.data);
