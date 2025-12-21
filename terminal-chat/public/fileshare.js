@@ -778,24 +778,33 @@ function handleChannelMessage(msg, peerId, channel) {
     if (msg.type === 'REQUEST_DOWNLOAD') {
         let file = null;
 
-        // SPEZIALFALL: Single File Hosting
-        // Wenn wir nur eine Datei hosten, ignorieren wir den angeforderten Pfad und senden diese Datei.
-        // Das verhindert Mapping-Fehler.
+        // SINGLE FILE FORCE MODE
+        // Wenn wir exakt eine Datei hosten und der "Echte Root Name" leer ist (Kennzeichen für Single File),
+        // dann senden wir IMMER diese eine Datei, egal was der Client angefordert hat.
+        // Das löst alle Probleme mit unterschiedlichen Namen (Drive Name vs. Dateiname).
         if (myRealRootName === "" && myHostedFiles.length === 1) {
+            console.log("[HOST] Single File Mode: Serving the only file available.");
             file = myHostedFiles[0];
         } else {
-            // Normaler Ordner-Modus
+            // NORMALER ORDNER MODUS
+            // 1. Pfad übersetzen (Virtual -> Real)
             const realPath = mapVirtualToReal(msg.filename);
+
+            // 2. Datei suchen (Pfad oder Name)
             file = myHostedFiles.find(f => (f.webkitRelativePath || f.name) === realPath);
-            // Fallback
-            if(!file) file = myHostedFiles.find(f => f.name === msg.filename.split('/').pop());
+
+            // 3. Fallback: Nur nach Dateinamen suchen
+            if (!file) {
+                const requestedName = msg.filename.split('/').pop();
+                file = myHostedFiles.find(f => f.name === requestedName);
+            }
         }
 
         if (file) {
-            console.log(`[HOST] Serving file: ${file.name}`);
+            console.log(`[HOST] Serving file: "${file.name}" to peer ${peerId}`);
             streamFileToPeer(file, channel);
         } else {
-            console.error(`[HOST] File not found: ${msg.filename}`);
+            console.error(`[HOST] File not found: "${msg.filename}"`);
             channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found on host.' }));
         }
     }
@@ -937,23 +946,26 @@ function getAllFilesInPathRecursive(files, startPath) {
         return path.startsWith(startPath + '/');
     });
 }
+
 function streamFileToPeer(f, c) {
     const chunk = 16384;
     let off = 0;
     const r = new FileReader();
 
-    // WICHTIG: Wenn webkitRelativePath leer ist (Single File), müssen wir f.name senden!
-    // Sonst kommt beim Empfänger kein Dateiname/Endung an.
+    // WICHTIG: Fallback für den Namen.
+    // webkitRelativePath ist bei Single Files oft leer, daher nehmen wir f.name.
     const nameToSend = f.webkitRelativePath || f.name;
 
     r.onload = e => {
         if(c.readyState !== 'open') return;
+
         c.send(JSON.stringify({
             type: 'FILE_CHUNK',
-            filename: nameToSend, // Hier stand vorher nur f.webkitRelativePath -> Fehler bei Single Files
+            filename: nameToSend, // Hier muss der echte Dateiname ("bild.png") stehen!
             data: arrayBufferToBase64(e.target.result),
             isLast: (off + chunk >= f.size)
         }));
+
         off += chunk;
         if(off < f.size) setTimeout(readNext, 5);
     };
@@ -961,6 +973,7 @@ function streamFileToPeer(f, c) {
     const readNext = () => r.readAsArrayBuffer(f.slice(off, off + chunk));
     readNext();
 }
+
 function arrayBufferToBase64(b){ let binary=''; const bytes=new Uint8Array(b); for(let i=0;i<bytes.byteLength;i++)binary+=String.fromCharCode(bytes[i]); return window.btoa(binary); }
 function base64ToArrayBuffer(b){ const s=window.atob(b); const y=new Uint8Array(s.length); for(let i=0;i<s.length;i++)y[i]=s.charCodeAt(i); return y.buffer; }
 function triggerBrowserDownload(b,n){ const u=URL.createObjectURL(b); const a=document.createElement('a'); a.href=u; a.download=n; document.body.appendChild(a); a.click(); document.body.removeChild(a); }
