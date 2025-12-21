@@ -636,46 +636,35 @@ io.on('connection', (socket) => {
 
     // --- PUBLIC CHAT SYSTEM ---
 
-    // PUB CREATE (Auto-Join integriert)
-    // PUB CREATE (Sequential IDs & Limit)
+// PUB CREATE (Sequential IDs & Limit)
     socket.on('pub_create', (name) => {
         const user = users[socket.id];
         if (!user) return;
 
-        // --- CHECK: LIMIT 100 USER ---
-        // (Bei Create ist nur 1 User drin, also immer ok, aber Struktur beachten)
-
-        // Wir erstellen den Raum erst temporär, die ID wird gleich durch reorganize vergeben
-        // Wir nutzen einen Platzhalter, der sofort überschrieben wird
+        // Temp ID für den Moment (wird gleich überschrieben)
         const tempId = "TEMP_" + Date.now();
         const roomKey = crypto.randomBytes(32).toString('hex');
 
         publicRooms[tempId] = {
             id: tempId,
+            // WICHTIG: Wenn kein Name da ist, nennen wir es explizit "Sector_PENDING"
+            // damit der Reorganizer weiß, dass er es umbenennen muss.
             name: name || `Sector_PENDING`,
             members: [],
             key: roomKey,
-            createdAt: Date.now() // <--- WICHTIG FÜR SORTIERUNG
+            createdAt: Date.now()
         };
 
         // User hinzufügen
         publicRooms[tempId].members.push(socket.id);
 
-        // JETZT: Aufräumen und Nummern vergeben (Das weist dem neuen Raum z.B. 0005 zu)
+        // Aufräumen und Nummern vergeben
         reorganizePublicRooms();
 
-        // Wir müssen herausfinden, welche ID unser neuer Raum bekommen hat.
-        // Da der User (socket.id) drin ist, suchen wir danach.
+        // Neuen Raum finden (wo unser User jetzt drin ist)
         const newRoom = Object.values(publicRooms).find(r => r.members.includes(socket.id));
 
         if (newRoom) {
-            // User Status finalisieren (Socket Join macht reorganizePublicRooms schon teilweise,
-            // aber socket.join müssen wir hier explizit machen, falls reorganize es nicht tat
-            // weil der User noch gar nicht im "pub_" channel war)
-
-            // Da reorganizePublicRooms nur sockets verschiebt, die schon im channel waren,
-            // und unser User noch nicht joined war (außer im Objekt), müssen wir ihn manuell joinen.
-
             socket.join(`pub_${newRoom.id}`);
             user.currentPub = newRoom.id;
 
@@ -687,11 +676,13 @@ io.on('connection', (socket) => {
                 key: newRoom.key
             });
 
-            io.emit('system_message', `NEW SIGNAL DETECTED: Sector ${newRoom.id} is now online.`);
+            // WICHTIG: KEIN GLOBALER BROADCAST MEHR!
+            // Wir sagen es nur dem Ersteller (System Message lokal)
+            socket.emit('system_message', `UPLINK ESTABLISHED: Sector ${newRoom.id} is online.`);
         }
     });
 
-    // PUB LEAVE (Ohne Reload, mit Löschung wenn leer)
+    // PUB LEAVE (Robust & Sauber)
     socket.on('pub_leave', () => {
         const user = users[socket.id];
         if (!user || !user.currentPub) return;
@@ -700,33 +691,39 @@ io.on('connection', (socket) => {
         const room = publicRooms[pubId];
 
         if (room) {
-            // 1. User entfernen
+            // 1. User aus dem Socket-Raum entfernen (WICHTIG!)
             socket.leave(`pub_${pubId}`);
+
+            // 2. Aus der Mitgliederliste entfernen
             room.members = room.members.filter(id => id !== socket.id);
             user.currentPub = null;
 
-            // Statt Text senden wir ein Event mit Key
-            io.to(`pub_${pubId}`).emit('room_user_status', {
-                username: user.username,
-                key: user.key,
-                type: 'leave',
-                context: 'pub',
-                roomId: pubId
-            });
-
-            // 2. CHECK: IST DER RAUM LEER?
-            if (room.members.length === 0) {
-                delete publicRooms[pubId];
-                serverLog(`Public Sector ${pubId} collapsed (No users left).`);
-                // Optional: Allen sagen, dass der Raum weg ist
-                // io.emit('system_message', `SIGNAL LOST: Sector ${pubId} went dark.`);
-                // --- NEU: Nummern neu vergeben, da einer fehlt ---
-                reorganizePublicRooms();
-                // ------------------------------------------------
+            // 3. Leave Event an verbleibende User senden
+            if (room.members.length > 0) {
+                io.to(`pub_${pubId}`).emit('room_user_status', {
+                    username: user.username,
+                    key: user.key,
+                    type: 'leave',
+                    context: 'pub',
+                    roomId: pubId
+                });
             }
+
+            // 4. CHECK: IST DER RAUM LEER?
+            if (room.members.length === 0) {
+                // WICHTIG: Explizit löschen, bevor wir reorganisieren!
+                delete publicRooms[pubId];
+                serverLog(`Public Sector ${pubId} collapsed (Empty).`);
+            }
+
+            // 5. Jetzt aufräumen/sortieren (schließt Lücken)
+            reorganizePublicRooms();
+        } else {
+            // Falls Raum nicht gefunden (Datenfehler), user trotzdem resetten
+            user.currentPub = null;
         }
 
-        // 3. Bestätigung an Client senden (damit UI resettet wird)
+        // 6. Bestätigung an Client (damit er auf LOCAL wechselt)
         socket.emit('pub_left_success');
     });
 
@@ -2116,19 +2113,6 @@ io.on('connection', (socket) => {
         io.emit('promo_update', generatePromoList());
     });
 
-    // Hilfsfunktion: Liste generieren (nur Public Groups mit Description)
-    function generatePromoList() {
-        return Object.values(privateGroups)
-            .filter(g => g.isPublic && g.description) // Nur öffentliche mit Beschreibung
-            .map(g => ({
-                id: g.id,
-                name: g.name,
-                desc: g.description,
-                count: g.members.length,
-                date: g.promotedAt
-            }));
-    }
-
     // Wenn neuer User kommt: Liste schicken
     socket.on('request_promo_list', () => {
         socket.emit('promo_update', generatePromoList());
@@ -2837,45 +2821,39 @@ server.listen(PORT, () => {
 
 // --- HELPER: PUBLIC ROOMS NEU ORGANISIEREN ---
 function reorganizePublicRooms() {
-    // 1. Alle Räume in ein Array wandeln und nach ERSTELLUNGSDATUM sortieren (Älteste zuerst)
-    // Wir gehen davon aus, dass wir 'createdAt' beim Erstellen speichern (siehe Schritt B)
-    const sortedRooms = Object.values(publicRooms).sort((a, b) => a.createdAt - b.createdAt);
+    // 1. MÜLLABFUHR: Nur Räume mit Mitgliedern behalten
+    const sortedRooms = Object.values(publicRooms)
+        .filter(r => r && r.members && r.members.length > 0)
+        .sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)); // Fallback für createdAt
 
-    // Temp-Speicher für die neue Struktur
     const newPublicRooms = {};
     let counter = 1;
 
     sortedRooms.forEach(room => {
         const oldId = room.id;
-        // Neue ID formatieren: 0001, 0002, ...
         const newId = String(counter).padStart(4, '0');
         counter++;
 
+        // Namen korrigieren (PENDING oder alte ID im Namen)
+        if (room.name.includes('PENDING') || room.name === `Sector_${oldId}`) {
+            room.name = `Sector_${newId}`;
+        }
+
+        // Wenn sich die ID ändert
         if (oldId !== newId) {
             serverLog(`Renumbering Sector: ${oldId} -> ${newId}`);
-
-            // 1. Raum-Daten aktualisieren
             room.id = newId;
-            // Falls der Name der Default-Name war (Sector_OLDID), passen wir ihn an
-            if (room.name === `Sector_${oldId}`) {
-                room.name = `Sector_${newId}`;
-            }
 
-            // 2. Alle User in diesem Raum updaten
+            // User & Sockets updaten
             room.members.forEach(memberId => {
                 const u = users[memberId];
-                if (u) {
-                    u.currentPub = newId; // User zeigt jetzt auf neue ID
-                }
+                if (u) u.currentPub = newId;
 
-                // SOCKETS VERSCHIEBEN
-                // Wir holen den Socket und lassen ihn den alten Raum verlassen und den neuen betreten
                 const s = io.sockets.sockets.get(memberId);
                 if (s) {
                     s.leave(`pub_${oldId}`);
                     s.join(`pub_${newId}`);
 
-                    // EVENT AN CLIENT: "Deine ID hat sich geändert!"
                     s.emit('pub_id_changed', {
                         oldId: oldId,
                         newId: newId,
@@ -2884,17 +2862,26 @@ function reorganizePublicRooms() {
                 }
             });
 
-            // Systemnachricht an den (jetzt neuen) Raum senden
+            // Info an den Raum
             io.to(`pub_${newId}`).emit('system_message', `SYSTEM NOTICE: Sector ID changed to #${newId} due to network reorganization.`);
         }
 
-        // In die neue Map speichern
+        // In neue Liste speichern
         newPublicRooms[newId] = room;
     });
 
-    // Globale Variable überschreiben
+    // Globale Liste überschreiben
     publicRooms = newPublicRooms;
+}
 
-    // Promo Update an alle
-    io.emit('promo_update', generatePromoList());
+function generatePromoList() {
+    return Object.values(privateGroups)
+        .filter(g => g.isPublic && g.description)
+        .map(g => ({
+            id: g.id,
+            name: g.name,
+            desc: g.description,
+            count: g.members.length,
+            date: g.promotedAt
+        }));
 }
