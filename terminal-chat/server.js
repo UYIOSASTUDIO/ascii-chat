@@ -13,6 +13,8 @@ const webpush = require('web-push');
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
 const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
 
+const activeGroupLinks = {};
+
 if (!publicVapidKey || !privateVapidKey) {
     console.error("FATAL ERROR: VAPID Keys fehlen in der .env Datei!");
     process.exit(1);
@@ -1190,6 +1192,138 @@ io.on('connection', (socket) => {
             group.mods.push(targetUser.id);
             io.to(`group_${group.id}`).emit('system_message', `PERMISSION UPDATE: ${targetUser.username} is now a MODERATOR.`);
         }
+    });
+
+    // --- GRUPPEN LINK ERSTELLEN ---
+    socket.on('group_create_link_req', (data) => {
+        // data: { groupId, limit (optional) }
+        const groupId = parseInt(data.groupId);
+        const limit = parseInt(data.limit) || 0; // 0 = Unendlich
+
+        const group = groups[groupId];
+        if (!group) return socket.emit('system_message', 'ERROR: Group not found.');
+
+        // Rechte Check: Nur Owner oder Mod
+        const isOwner = group.owner === socket.id;
+        const isMod = group.mods.includes(socket.id);
+
+        if (!isOwner && !isMod) {
+            return socket.emit('system_message', 'DENIED: Only Owner or Mods can create invite links.');
+        }
+
+        // Link ID generieren (Zufällig)
+        const linkId = Math.random().toString(36).substr(2, 9);
+
+        // Link speichern
+        activeGroupLinks[linkId] = {
+            groupId: groupId,
+            limit: limit,
+            uses: 0,
+            creator: socket.username
+        };
+
+        // Nachricht an den aktuellen Raum senden (wo der Befehl getippt wurde)
+        // Wir nutzen 'io.to', aber wir müssen wissen, wo der User gerade tippt.
+        // Da der User im Client /group link tippt, ist er im Kontext 'socket.room' (falls du das trackst)
+        // ODER wir senden es an alle User im aktuellen Chat-Raum.
+
+        // Da dein Chat-System auf Client-Side "activeChatId" basiert, müssen wir tricksen:
+        // Wir senden das Event an alle im Raum, in dem der User *gerade sendet*.
+        // Wir gehen davon aus, dass du beim Tippen die 'currentChatId' mitsendest?
+        // NEIN, wir machen es einfacher: Der Client sendet die `targetRoomId` mit.
+
+        // KORREKTUR: Wir brauchen die targetRoomId vom Client.
+        if (data.targetRoomId) {
+            io.to(data.targetRoomId).emit('group_link_display', {
+                linkId: linkId,
+                groupId: groupId,
+                groupName: group.name,
+                creator: socket.username,
+                limit: limit,
+                isProtected: !!group.password,
+                isPrivate: group.isPrivate
+            });
+
+            socket.emit('system_message', `Link created for Group ${groupId}. Limit: ${limit === 0 ? '∞' : limit}`);
+        }
+    });
+
+    // --- GRUPPEN LINK BENUTZEN ---
+    socket.on('group_use_link_req', (linkId) => {
+        const link = activeGroupLinks[linkId];
+
+        if (!link) {
+            return socket.emit('system_message', 'ERROR: Link is invalid or expired.');
+        }
+
+        // Limit prüfen
+        if (link.limit > 0 && link.uses >= link.limit) {
+            // Sollte eigentlich schon optisch weg sein, aber sicher ist sicher
+            return socket.emit('system_message', 'ERROR: Link limit reached.');
+        }
+
+        // Zähler hoch
+        if (link.limit > 0) {
+            link.uses++;
+
+            // Wenn voll -> Link löschen & Alle Clients informieren
+            if (link.uses >= link.limit) {
+                delete activeGroupLinks[linkId];
+                // Event an alle senden: Link X ist abgelaufen (zum UI updaten)
+                io.emit('group_link_expired', linkId);
+            }
+        }
+
+        // JETZT: Normale Join-Logik anstoßen
+        // Wir rufen quasi die Join-Funktion intern auf
+        const group = groups[link.groupId];
+
+        // 1. Check: Bereits drin?
+        if (group.members.includes(socket.id) || group.mods.includes(socket.id) || group.owner === socket.id) {
+            return socket.emit('system_message', `You are already in Group ${group.name}.`);
+        }
+
+        // 2. Passwort?
+        if (group.password) {
+            socket.emit('group_password_required', group.id);
+            return;
+        }
+
+        // 3. Privat? -> Request senden
+        if (group.isPrivate) {
+            // Join Request Logik
+            const ownerSocket = io.sockets.sockets.get(group.owner);
+            if (ownerSocket) {
+                ownerSocket.emit('group_join_request_alert', {
+                    username: socket.username,
+                    userKey: socket.id, // bzw. Key
+                    groupId: group.id,
+                    isGhost: socket.isGhost
+                });
+            }
+            socket.emit('system_message', `Request sent to join private Group ${group.name}.`);
+            return;
+        }
+
+        // 4. Offen -> Rein
+        socket.join(group.id); // Socket.io Room
+        group.members.push(socket.id);
+
+        socket.emit('group_joined_success', {
+            id: group.id,
+            name: group.name,
+            role: 'MEMBER',
+            key: group.key
+        });
+
+        io.to(group.id).emit('room_user_status', {
+            username: socket.username,
+            key: socket.id, // bzw Key
+            type: 'join',
+            context: 'group',
+            roomId: group.id,
+            isGhost: socket.isGhost
+        });
     });
 
     // 6. KICK PROCESS (Multi-Target & Reason & Admin Immunity)

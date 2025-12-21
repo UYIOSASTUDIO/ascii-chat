@@ -84,6 +84,11 @@ window.triggerInviteAccept = (groupId) => {
     socket.emit('group_decision', { groupId: groupId, accept: true });
 };
 
+window.triggerLinkJoin = (linkId) => {
+    printLine('Processing invite link...', 'system-msg');
+    socket.emit('group_use_link_req', linkId);
+};
+
 // Hilfsfunktion: Klick auf Namen -> Server fragen wer das ist
 window.handleNameClick = (key) => {
     // 1. Visuelles Feedback
@@ -958,6 +963,22 @@ async function handleInput(text) {
             else if (sub === 'dissolve') socket.emit('group_dissolve');
             else if (sub === 'accept') socket.emit('group_decision', { targetKey: args[2], accept: true });
             else if (sub === 'list') socket.emit('group_list_req');
+            else if (sub === 'link') {
+                // Syntax: /group link [GROUP_ID] [LIMIT]
+                const groupId = args[2];
+                const limit = args[3] || 0; // Optional
+
+                if (!groupId) {
+                    printLine('USAGE: /group link [GROUP_ID] [OPTIONAL_LIMIT]', 'error-msg');
+                } else {
+                    // Wir senden die ID des Chats mit, in dem wir gerade sind!
+                    socket.emit('group_create_link_req', {
+                        groupId: groupId,
+                        limit: limit,
+                        targetRoomId: activeChatId // <--- WICHTIG: Damit der Server weiß wohin
+                    });
+                }
+            }
             else if (sub === 'password') {
                 // /group password [PW]
                 const pw = args[2]; // Kann leer sein (zum Löschen)
@@ -1636,6 +1657,65 @@ socket.on('group_broadcast_received', (data) => {
     // Sound oder visueller Hinweis, falls man woanders ist
     if (activeChatId !== dest) {
         printLine(`(i) ⚠️ BROADCAST in ${myChats[dest].name}`, 'system-msg');
+    }
+});
+
+// LINK ANZEIGEN
+socket.on('group_link_display', (data) => {
+    // data: { linkId, groupId, groupName, creator, limit, isProtected, isPrivate }
+
+    // Ziel: Aktueller Chat (activeChatId)
+    // Da wir das Event per io.to(roomId) bekommen haben, passt das,
+    // aber wir müssen sicherstellen, dass wir es im richtigen Tab anzeigen.
+    // Wir nutzen einfach activeChatId oder besser: Wir zeigen es dort an, wo es ankam.
+    // Da Socket.io Rooms nutzt, kommt es nur an, wenn wir in dem Raum sind.
+
+    // Wir rendern es in den Chat, in dem wir gerade sind (das ist vereinfacht,
+    // aber passt meistens, da man Links ja im aktiven Gespräch postet).
+    const target = activeChatId;
+
+    const lockIcon = data.isProtected ? '🔒' : (data.isPrivate ? '🛡️' : '🌍');
+    const limitText = data.limit === 0 ? 'UNLIMITED' : `${data.limit} USES LEFT`;
+
+    // Button Action
+    const action = `window.triggerLinkJoin('${data.linkId}')`;
+
+    const html = `
+        <div id="link-${data.linkId}" style="border: 1px dashed #0f0; background: rgba(0,255,0,0.05); padding: 10px; margin: 10px 0; position: relative;">
+            <div style="font-weight: bold; color: #0f0; border-bottom: 1px solid #333; padding-bottom: 5px; margin-bottom: 5px;">
+                ${lockIcon} GROUP INVITE: ${data.groupName}
+            </div>
+            <div style="font-size: 0.9em; color: #aaa;">
+                ID: ${data.groupId}<br>
+                HOST: ${data.creator}<br>
+                LIMIT: <span id="limit-${data.linkId}">${limitText}</span>
+            </div>
+            <div style="margin-top: 10px; text-align: center;">
+                <button onclick="${action}" class="voice-btn" style="width: 100%; border-color: #0f0; color: #0f0;">
+                    [ JOIN GROUP ]
+                </button>
+            </div>
+        </div>
+    `;
+
+    printToChat(target, html, '');
+});
+
+// LINK ABGELAUFEN (UI Update)
+socket.on('group_link_expired', (linkId) => {
+    const el = document.getElementById(`link-${linkId}`);
+    if (el) {
+        // Option A: Löschen
+        // el.remove();
+
+        // Option B: Als "Expired" markieren (Cooler)
+        el.style.borderColor = '#555';
+        el.style.background = 'rgba(0,0,0,0.5)';
+        el.innerHTML = `
+            <div style="color: #555; text-align: center; padding: 10px;">
+                [ LINK EXPIRED / LIMIT REACHED ]
+            </div>
+        `;
     }
 });
 
