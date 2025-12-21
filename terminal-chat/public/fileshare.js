@@ -129,51 +129,50 @@ function confirmMount() {
     const password = document.getElementById('mountPassword').value;
     const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
+    // ERKENNUNG: Ist es ein einzelnes File?
+    // Einzelne Files haben oft keinen webkitRelativePath oder er ist leer
+    const isSingleFile = pendingFiles.length === 1 && (!pendingFiles[0].webkitRelativePath || pendingFiles[0].webkitRelativePath === "");
+
     // GLOBALS SETZEN
     myHostedFiles = pendingFiles;
     myRootFolderName = customName;
-    myRealRootName = pendingFiles[0].webkitRelativePath.split('/')[0];
+
+    // WICHTIG: Bei Single Files ist der "echte" Root leer (wir mappen direkt auf den Dateinamen)
+    // Bei Ordnern nehmen wir den ersten Teil des Pfades.
+    myRealRootName = isSingleFile ? "" : pendingFiles[0].webkitRelativePath.split('/')[0];
     myMountPassword = password || null;
 
-    console.log(`[MOUNT] Virtual: "${myRootFolderName}" -> Real: "${myRealRootName}"`);
+    console.log(`[MOUNT] Virtual: "${myRootFolderName}" -> Real: "${myRealRootName}" (SingleFile: ${isSingleFile})`);
 
     closeMountModal();
 
-    // UI Update (Buttons tauschen)
     document.getElementById('btnMount').style.display = 'none';
     const unmountBtn = document.getElementById('btnUnmount');
     unmountBtn.style.display = 'block';
     unmountBtn.innerText = `[-] UNMOUNT [${customName}]`;
 
-    // --- NEU: AUTOMATISCH IN DEN EIGENEN ORDNER SPRINGEN ---
-
-    // 1. Ansicht aufräumen (Falls gerade ein Remote-File offen war)
+    // UI Reset
     document.getElementById('filePreview').style.display = 'none';
     document.getElementById('fileGrid').style.display = 'grid';
     document.getElementById('fileGrid').innerHTML = '';
     incomingFileBuffer = [];
     isPreviewMode = false;
 
-    // 2. Den Fokus auf MICH (Socket ID) setzen
     currentActivePeerId = socket.id;
-
-    // 3. Lokalen Inhalt rendern
     currentPathStr = customName;
+
     const items = getMappedLocalItems(currentPathStr);
     renderLocalGrid(items);
     updateBreadcrumbs(['ROOT', customName]);
 
-    // 4. Sidebar Highlight entfernen (damit nicht noch der alte User markiert ist)
-    // (Der grüne Rahmen um deinen eigenen Eintrag kommt automatisch, sobald der Server die Liste updated)
     document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
-
-    // --------------------------------------------------------
 
     socket.emit('fs_start_hosting', {
         folderName: customName,
         username: user,
         allowedUsers: allowedUsers,
-        isProtected: !!password
+        isProtected: !!password,
+        isSingleFile: isSingleFile // <--- NEU: Flag senden
     });
 }
 
@@ -212,47 +211,47 @@ function submitPassword() {
 
 // --- UI LOGIC ---
 
-function renderSidebar() {
+function renderSidebar(shares) {
+    // Falls keine Shares übergeben wurden, nutzen wir die globale Liste (für Suche)
+    const dataToRender = shares || latestSharesList;
+    latestSharesList = dataToRender; // Update global cache
+
     const list = document.getElementById('shareList');
     list.innerHTML = '';
 
+    // Suche anwenden
     const searchTerm = document.getElementById('driveSearch').value.toLowerCase();
-    const allIds = Object.keys(latestSharesList);
+    const allIds = Object.keys(dataToRender);
 
-    // FILTER LOGIK: FolderName ODER Username ODER ID muss passen
     const filteredIds = allIds.filter(id => {
-        const item = latestSharesList[id];
+        const item = dataToRender[id];
         return item.folderName.toLowerCase().includes(searchTerm) ||
             item.username.toLowerCase().includes(searchTerm) ||
             id.toLowerCase().includes(searchTerm);
     });
 
     if (filteredIds.length === 0) {
-        if(allIds.length === 0) {
-            list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No active drives.</li>';
-        } else {
-            list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No matches found.</li>';
-        }
+        list.innerHTML = '<li style="padding:15px; color:#555; text-align:center;">No matches found.</li>';
         return;
     }
 
     filteredIds.forEach(socketId => {
-        const item = latestSharesList[socketId];
+        const item = dataToRender[socketId];
         const isMe = (socketId === socket.id);
         const isLocked = item.isProtected && !isMe;
 
         const li = document.createElement('li');
         li.className = 'share-item';
-        // Wenn dieser Eintrag gerade aktiv ist, highlighten
         if (socketId === currentActivePeerId) li.classList.add('active');
-        if(isMe) li.style.cssText = 'color:#0f0; border-left:4px solid #0f0;';
+        if (isMe) li.style.cssText += 'color:#0f0; border-left:4px solid #0f0;';
 
+        // ICONS: Schloss + (Datei ODER Ordner)
         const lockIcon = isLocked ? '🔒 ' : '';
-        // Zeige auch die ID klein an, damit man weiß wonach man gesucht hat
+        const typeIcon = item.isSingleFile ? '📄 ' : '📁 '; // <--- NEUE UNTERSCHEIDUNG
         const idDisplay = `<span style="font-size:0.7em; color:#444;">[ID: ${socketId.substr(0,5)}]</span>`;
 
         li.innerHTML = `
-            <span class="share-name">${lockIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span>
+            <span class="share-name">${lockIcon}${typeIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span>
             <span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username} ${idDisplay}</span>
         `;
 
@@ -261,17 +260,13 @@ function renderSidebar() {
             li.classList.add('active');
 
             if (isMe) {
-                // LOCAL
                 document.getElementById('filePreview').style.display = 'none';
                 document.getElementById('fileGrid').style.display = 'grid';
                 currentActivePeerId = socketId;
-
                 currentPathStr = item.folderName;
-                const items = getMappedLocalItems(currentPathStr);
-                renderLocalGrid(items);
+                renderLocalGrid(getMappedLocalItems(currentPathStr));
                 updateBreadcrumbs(['ROOT', item.folderName]);
             } else {
-                // REMOTE
                 if (item.isProtected) {
                     if (knownPasswords[socketId]) {
                         initiateConnectionWithPassword(socketId, knownPasswords[socketId]);
@@ -522,8 +517,14 @@ function mapVirtualToReal(virtualPath) {
 }
 
 function mapRealToVirtual(realPath) {
+    // Wenn Single File (RealRootName ist leer)
+    if (myRealRootName === "") {
+        return myRootFolderName + (realPath ? '/' + realPath : '');
+    }
+
     if (!realPath) return "";
-    if (myRootFolderName && myRealRootName && realPath.startsWith(myRealRootName)) {
+    if (realPath === myRealRootName) return myRootFolderName;
+    if (realPath.startsWith(myRealRootName + '/')) {
         return realPath.replace(myRealRootName, myRootFolderName);
     }
     return realPath;
@@ -717,7 +718,10 @@ function handleChannelMessage(msg, peerId, channel) {
 
     if (msg.type === 'REQUEST_DOWNLOAD') {
         const realPath = mapVirtualToReal(msg.filename);
-        let file = myHostedFiles.find(f => f.webkitRelativePath === realPath);
+        // Robustere Suche: Prüfe Pfad UND Name
+        let file = myHostedFiles.find(f => (f.webkitRelativePath || f.name) === realPath);
+
+        // Fallback: Nur nach Dateinamen suchen
         if(!file) file = myHostedFiles.find(f => f.name === msg.filename.split('/').pop());
 
         if (file) streamFileToPeer(file, channel);
@@ -804,17 +808,58 @@ function addBackButton(g,cb){
 
 function sendLargeJSON(c,t,p){ const j=JSON.stringify({type:t,payload:p}); const MAX=12000; for(let i=0;i<j.length;i+=MAX) c.send(JSON.stringify({type:'JSON_CHUNK',data:j.slice(i,i+MAX),isLast:i+MAX>=j.length})); }
 
-function getItemsInPath(files,path){
-    return files.filter(f => f.webkitRelativePath.startsWith(path + '/')).map(f => {
-        const p = f.webkitRelativePath.substring(path.length + 1).split('/');
-        return p.length === 1 ?
-            {name:p[0], type:'file', fullPath:f.webkitRelativePath} :
-            {name:p[0], type:'folder', fullPath:path+'/'+p[0]};
-    }).filter((v,i,a) => a.findIndex(t => (t.name === v.name)) === i);
+function getItemsInPath(files, currentPath) {
+    const items = [];
+    const knownFolders = new Set();
+
+    files.forEach(file => {
+        // Fallback: Wenn webkitRelativePath leer ist (Single File), nimm den Namen
+        const fullPath = file.webkitRelativePath || file.name;
+
+        // Fall 1: Wir sind im Root (currentPath ist leer)
+        if (!currentPath) {
+            if (!fullPath.includes('/')) {
+                // Es ist eine Datei direkt im Root (Single File)
+                items.push({ name: fullPath, type: 'file', size: file.size, fullPath: fullPath });
+            } else {
+                // Es ist ein Ordner im Root
+                const folderName = fullPath.split('/')[0];
+                if (!knownFolders.has(folderName)) {
+                    knownFolders.add(folderName);
+                    items.push({ name: folderName, type: 'folder', fullPath: folderName });
+                }
+            }
+            return;
+        }
+
+        // Fall 2: Wir sind in einem Unterordner
+        if (fullPath.startsWith(currentPath + '/')) {
+            const relativePart = fullPath.substring(currentPath.length + 1);
+            const parts = relativePart.split('/');
+
+            if (parts.length === 1) {
+                if(parts[0] !== "") items.push({ name: parts[0], type: 'file', size: file.size, fullPath: fullPath });
+            } else {
+                const folderName = parts[0];
+                if (!knownFolders.has(folderName)) {
+                    knownFolders.add(folderName);
+                    items.push({ name: folderName, type: 'folder', fullPath: currentPath + '/' + folderName });
+                }
+            }
+        }
+    });
+
+    // Duplikate filtern
+    return items.filter((v,i,a) => a.findIndex(t => (t.name === v.name && t.type === v.type)) === i);
 }
 
-function getAllFilesInPathRecursive(files,path){ return files.filter(f=>f.webkitRelativePath.startsWith(path+'/')); }
-
+function getAllFilesInPathRecursive(files, startPath) {
+    return files.filter(file => {
+        const path = file.webkitRelativePath || file.name;
+        if (!startPath || startPath === "") return true;
+        return path.startsWith(startPath + '/');
+    });
+}
 function streamFileToPeer(f,c){
     const chunk=16384; let off=0; const r=new FileReader();
     r.onload=e=>{ if(c.readyState!=='open')return; c.send(JSON.stringify({type:'FILE_CHUNK',filename:f.webkitRelativePath,data:arrayBufferToBase64(e.target.result),isLast:(off+chunk>=f.size)})); off+=chunk; if(off<f.size)setTimeout(readNext,5); };

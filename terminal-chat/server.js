@@ -2553,13 +2553,12 @@ io.on('connection', (socket) => {
     // 1. User kündigt Share an
     socket.on('fs_start_hosting', (data) => {
         activeShares[socket.id] = {
-            // WICHTIG: Wir nehmen den Namen aus dem Paket (data.username),
-            // falls er da ist. Sonst Fallback auf Socket oder Anonymous.
             username: data.username || socket.username || 'Anonymous',
             key: socket.id.substr(0, 5),
             folderName: data.folderName,
             allowedUsers: data.allowedUsers || [],
-            isProtected: data.isProtected || false
+            isProtected: data.isProtected || false,
+            isSingleFile: data.isSingleFile || false // <--- NEU: Typ speichern
         };
         broadcastShares();
     });

@@ -291,12 +291,10 @@ header {
 
 /* SEARCH BAR STYLING */
 #driveSearch {
-    width: 90%;
-    margin: 0 auto 15px auto;
+    margin-bottom: 15px;
     display: block;
     background: #000;
     border: 1px solid #333;
-    border-bottom: 1px solid #0f0;
     color: #0f0;
     padding: 8px;
     font-family: 'Courier New', monospace;
