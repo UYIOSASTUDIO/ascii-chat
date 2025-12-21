@@ -19,6 +19,11 @@ const knownPasswords = {}; // NEU: Speichert Passwörter für diese Session
 
 let latestSharesList = {};
 
+// NEU: Für Edit-Mode
+let myAllowedUsers = [];
+let isEditMode = false;
+let isSingleFileGlobal = false; // Wir merken uns das Flag global
+
 // --- WEBRTC CONFIG ---
 const peers = {};
 const iceConfig = {
@@ -82,17 +87,38 @@ socket.on('p2p_signal', async (data) => {
 // --- MOUNT MODAL LOGIC ---
 
 function triggerMount() {
+    isEditMode = false; // Wir mounten neu
     document.getElementById('mountModal').style.display = 'flex';
+    document.getElementById('modalTitle').innerText = "MOUNT CONFIGURATION";
+    document.getElementById('fileSelectionArea').style.display = 'flex'; // Datei-Wahl anzeigen
+    document.getElementById('btnConfirmMount').innerText = "[ MOUNT DRIVE ]";
+
+    // Reset Fields
     document.getElementById('mountName').value = '';
     document.getElementById('mountAllowedUsers').value = '';
     document.getElementById('mountPassword').value = '';
-    document.getElementById('selectedFolderName').textContent = 'No folder selected';
+    document.getElementById('selectedFolderName').textContent = 'No content selected';
     pendingFiles = null;
+}
+
+function triggerEdit() {
+    isEditMode = true; // Wir editieren nur
+    document.getElementById('mountModal').style.display = 'flex';
+    document.getElementById('modalTitle').innerText = "EDIT CONFIGURATION";
+    document.getElementById('fileSelectionArea').style.display = 'none'; // Datei-Wahl ausblenden
+    document.getElementById('btnConfirmMount').innerText = "[ PUBLISH EDITS ]";
+
+    // Felder mit aktuellen Werten füllen
+    document.getElementById('mountName').value = myRootFolderName;
+    document.getElementById('mountAllowedUsers').value = myAllowedUsers.join(', ');
+    // Passwort füllen (oder leer lassen, sicherheitshalber leer lassen oder Platzhalter)
+    document.getElementById('mountPassword').value = myMountPassword || "";
 }
 
 function closeMountModal() {
     document.getElementById('mountModal').style.display = 'none';
     pendingFiles = null;
+    isEditMode = false;
 }
 
 // Hidden Input Change Listener
@@ -119,59 +145,81 @@ if(hiddenInput) {
 }
 
 function confirmMount() {
-    if (!pendingFiles || pendingFiles.length === 0) {
-        alert("Please select a folder first.");
-        return;
+    // FALL 1: NEUER MOUNT (Dateien müssen gewählt sein)
+    if (!isEditMode) {
+        if (!pendingFiles || pendingFiles.length === 0) {
+            alert("Please select a folder or file first.");
+            return;
+        }
+        // Daten aus Input übernehmen
+        myHostedFiles = pendingFiles;
+
+        // Check: Single File?
+        isSingleFileGlobal = pendingFiles.length === 1 && (!pendingFiles[0].webkitRelativePath || pendingFiles[0].webkitRelativePath === "");
+
+        // Real Root setzen
+        myRealRootName = isSingleFileGlobal ? "" : pendingFiles[0].webkitRelativePath.split('/')[0];
     }
 
+    // FALL 2: EDIT MODE (Dateien bleiben gleich, wir lesen sie NICHT neu ein)
+    // Wir nutzen einfach die existierenden `myHostedFiles`, `myRealRootName` und `isSingleFileGlobal` weiter.
+
+    // GEMEINSAME LOGIK (Daten aus Formular lesen)
     const customName = document.getElementById('mountName').value || "Unnamed Drive";
     const allowedStr = document.getElementById('mountAllowedUsers').value;
     const password = document.getElementById('mountPassword').value;
-    const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-    const isSingleFile = pendingFiles.length === 1 && (!pendingFiles[0].webkitRelativePath || pendingFiles[0].webkitRelativePath === "");
-
-    // GLOBALS SETZEN
-    myHostedFiles = pendingFiles;
+    // Globals updaten
+    myAllowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
     myRootFolderName = customName;
-    myRealRootName = isSingleFile ? "" : pendingFiles[0].webkitRelativePath.split('/')[0];
     myMountPassword = password || null;
 
-    console.log(`[MOUNT] Virtual: "${myRootFolderName}" -> Real: "${myRealRootName}" (SingleFile: ${isSingleFile})`);
+    console.log(`[${isEditMode ? 'EDIT' : 'MOUNT'}] Name: "${customName}" | Protected: ${!!password}`);
 
     closeMountModal();
 
+    // UI Buttons Update
     document.getElementById('btnMount').style.display = 'none';
     const unmountBtn = document.getElementById('btnUnmount');
+    const editBtn = document.getElementById('btnEdit'); // Den neuen Button holen
+
     unmountBtn.style.display = 'block';
-    unmountBtn.innerText = `[-] UNMOUNT [${customName}]`;
+    unmountBtn.innerText = `[-] UNMOUNT`;
 
-    // --- LOGIC: DIREKT ÖFFNEN WENN SINGLE FILE ---
-    document.getElementById('filePreview').style.display = 'none';
-    document.getElementById('fileGrid').style.display = 'grid';
-    document.getElementById('fileGrid').innerHTML = '';
-    incomingFileBuffer = [];
-    isPreviewMode = false;
+    editBtn.style.display = 'block'; // Edit Button anzeigen
 
-    currentActivePeerId = socket.id;
-    currentPathStr = customName;
-    document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
-
-    if (isSingleFile) {
-        // WICHTIG: Sofort öffnen statt Grid
-        openFile(myHostedFiles[0]);
-    } else {
-        const items = getMappedLocalItems(currentPathStr);
-        renderLocalGrid(items);
-        updateBreadcrumbs(['ROOT', customName]);
+    // UI Reset (Nur bei neuem Mount nötig, aber schadet bei Edit nicht, um Namen zu refreshen)
+    if (!isEditMode) {
+        document.getElementById('filePreview').style.display = 'none';
+        document.getElementById('fileGrid').style.display = 'grid';
+        document.getElementById('fileGrid').innerHTML = '';
+        incomingFileBuffer = [];
+        isPreviewMode = false;
+        currentActivePeerId = socket.id;
     }
 
+    // Breadcrumbs & Title update (falls wir gerade im eigenen Ordner sind)
+    if (currentActivePeerId === socket.id) {
+        currentPathStr = customName;
+        document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
+
+        if (isSingleFileGlobal) {
+            openFile(myHostedFiles[0]);
+        } else {
+            const items = getMappedLocalItems(currentPathStr);
+            renderLocalGrid(items);
+            updateBreadcrumbs(['ROOT', customName]);
+        }
+    }
+
+    // SERVER UPDATE SENDEN
+    // Der Server überschreibt einfach die Daten für unseren Socket -> Perfektes Update
     socket.emit('fs_start_hosting', {
         folderName: customName,
         username: user,
-        allowedUsers: allowedUsers,
+        allowedUsers: myAllowedUsers,
         isProtected: !!password,
-        isSingleFile: isSingleFile
+        isSingleFile: isSingleFileGlobal
     });
 }
 

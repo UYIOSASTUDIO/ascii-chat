@@ -21,6 +21,7 @@
             <button id="btnMount" class="btn-mount" onclick="triggerMount()">
                 [+] MOUNT LOCAL DRIVE
             </button>
+            <button id="btnEdit" class="btn-mount" onclick="triggerEdit()" style="display:none; background: #b35900; margin-bottom: 5px;">[*] EDIT CONFIG</button>
             <button id="btnUnmount" class="btn-mount btn-danger" onclick="unmountDrive()" style="display:none;">
                 [-] UNMOUNT DRIVE
             </button>
@@ -70,7 +71,7 @@
 
 <div id="mountModal" class="modal-overlay" style="display:none;">
     <div class="modal-window">
-        <h3>MOUNT CONFIGURATION</h3>
+        <h3 id="modalTitle">MOUNT CONFIGURATION</h3>
 
         <div class="form-group">
             <label>DISPLAY NAME:</label>
@@ -87,16 +88,16 @@
             <input type="password" id="mountPassword" placeholder="Leave empty for no password">
         </div>
 
-        <div class="form-group">
-            <label>SELECT FOLDER:</label>
-            <button class="btn-action" onclick="document.getElementById('hiddenFolderInput').click()">[ CHOOSE FOLDER ]</button>
-            <span id="selectedFolderName" style="margin-left:10px; color:#555;">No folder selected</span>
+        <div class="form-group" id="fileSelectionArea">
+            <label>SELECT FOLDER / FILE:</label>
+            <button class="btn-action" onclick="document.getElementById('hiddenFolderInput').click()">[ CHOOSE CONTENT ]</button>
+            <span id="selectedFolderName" style="margin-left:10px; color:#555;">No content selected</span>
             <input type="file" id="hiddenFolderInput" webkitdirectory directory multiple hidden>
         </div>
 
         <div class="modal-actions">
             <button class="btn-mount btn-danger" onclick="closeMountModal()">CANCEL</button>
-            <button class="btn-mount" onclick="confirmMount()">[ MOUNT DRIVE ]</button>
+            <button id="btnConfirmMount" class="btn-mount" onclick="confirmMount()">[ MOUNT DRIVE ]</button>
         </div>
     </div>
 </div>
