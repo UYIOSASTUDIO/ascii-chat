@@ -1769,6 +1769,36 @@ socket.on('pub_joined_success', async (data) => {
     updateVoiceUI('idle');
 });
 
+// EVENT: PUB CHAT ID GEÄNDERT (Renumbering)
+socket.on('pub_id_changed', (data) => {
+    // data: { oldId, newId, newName }
+
+    // 1. Haben wir den Chat?
+    const chat = myChats[data.oldId];
+    if (chat) {
+        // Chat Objekt updaten
+        chat.id = data.newId;
+        chat.name = data.newName;
+
+        // Key im Objekt ändern: Wir müssen den Eintrag unter oldId löschen und unter newId speichern
+        delete myChats[data.oldId];
+        myChats[data.newId] = chat;
+
+        // 2. Wenn wir diesen Chat gerade offen haben -> UI anpassen
+        if (activeChatId === data.oldId) {
+            activeChatId = data.newId;
+            promptSpan.textContent = `PUB/${data.newId}>`;
+        }
+
+        // 3. Sidebar aktualisieren
+        renderChatList();
+
+        // 4. Systemnachricht in den Chat drucken (für den User lokal)
+        printToChat(data.newId, ' ', '');
+        printToChat(data.newId, `>>> SYSTEM UPDATE: Sector ID reassigned to #${data.newId}`, 'system-msg');
+    }
+});
+
 // FORCED GROUP DELETION (Wenn Owner schließt)
 socket.on('group_dissolved', (groupId) => {
 
