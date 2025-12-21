@@ -129,14 +129,11 @@ function confirmMount() {
     const password = document.getElementById('mountPassword').value;
     const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-    // ERKENNUNG: Ist es ein einzelnes File? (Hat oft keinen relativen Pfad)
     const isSingleFile = pendingFiles.length === 1 && (!pendingFiles[0].webkitRelativePath || pendingFiles[0].webkitRelativePath === "");
 
     // GLOBALS SETZEN
     myHostedFiles = pendingFiles;
     myRootFolderName = customName;
-
-    // WICHTIG: Wenn Single File -> Real Root ist ein leerer String!
     myRealRootName = isSingleFile ? "" : pendingFiles[0].webkitRelativePath.split('/')[0];
     myMountPassword = password || null;
 
@@ -149,7 +146,7 @@ function confirmMount() {
     unmountBtn.style.display = 'block';
     unmountBtn.innerText = `[-] UNMOUNT [${customName}]`;
 
-    // UI Reset
+    // --- LOGIC: DIREKT ÖFFNEN WENN SINGLE FILE ---
     document.getElementById('filePreview').style.display = 'none';
     document.getElementById('fileGrid').style.display = 'grid';
     document.getElementById('fileGrid').innerHTML = '';
@@ -158,13 +155,16 @@ function confirmMount() {
 
     currentActivePeerId = socket.id;
     currentPathStr = customName;
-
-    // Grid sofort laden
-    const items = getMappedLocalItems(currentPathStr);
-    renderLocalGrid(items);
-    updateBreadcrumbs(['ROOT', customName]);
-
     document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
+
+    if (isSingleFile) {
+        // WICHTIG: Sofort öffnen statt Grid
+        openFile(myHostedFiles[0]);
+    } else {
+        const items = getMappedLocalItems(currentPathStr);
+        renderLocalGrid(items);
+        updateBreadcrumbs(['ROOT', customName]);
+    }
 
     socket.emit('fs_start_hosting', {
         folderName: customName,
@@ -776,23 +776,26 @@ function handleChannelMessage(msg, peerId, channel) {
     }
 
     if (msg.type === 'REQUEST_DOWNLOAD') {
-        // 1. Pfad übersetzen
-        const realPath = mapVirtualToReal(msg.filename);
+        let file = null;
 
-        // 2. Datei suchen
-        // Wir suchen entweder nach dem exakten Pfad ODER (als Fallback) nur nach dem Dateinamen
-        let file = myHostedFiles.find(f => (f.webkitRelativePath || f.name) === realPath);
-
-        // Fallback: Wenn Pfad-Matching fehlschlägt, nimm den Dateinamen (gut für Single Files)
-        if (!file) {
-            const requestedName = msg.filename.split('/').pop();
-            file = myHostedFiles.find(f => f.name === requestedName);
+        // SPEZIALFALL: Single File Hosting
+        // Wenn wir nur eine Datei hosten, ignorieren wir den angeforderten Pfad und senden diese Datei.
+        // Das verhindert Mapping-Fehler.
+        if (myRealRootName === "" && myHostedFiles.length === 1) {
+            file = myHostedFiles[0];
+        } else {
+            // Normaler Ordner-Modus
+            const realPath = mapVirtualToReal(msg.filename);
+            file = myHostedFiles.find(f => (f.webkitRelativePath || f.name) === realPath);
+            // Fallback
+            if(!file) file = myHostedFiles.find(f => f.name === msg.filename.split('/').pop());
         }
 
         if (file) {
+            console.log(`[HOST] Serving file: ${file.name}`);
             streamFileToPeer(file, channel);
         } else {
-            console.error(`[HOST] File not found: ${msg.filename} (Real: ${realPath})`);
+            console.error(`[HOST] File not found: ${msg.filename}`);
             channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found on host.' }));
         }
     }
@@ -934,10 +937,29 @@ function getAllFilesInPathRecursive(files, startPath) {
         return path.startsWith(startPath + '/');
     });
 }
-function streamFileToPeer(f,c){
-    const chunk=16384; let off=0; const r=new FileReader();
-    r.onload=e=>{ if(c.readyState!=='open')return; c.send(JSON.stringify({type:'FILE_CHUNK',filename:f.webkitRelativePath,data:arrayBufferToBase64(e.target.result),isLast:(off+chunk>=f.size)})); off+=chunk; if(off<f.size)setTimeout(readNext,5); };
-    const readNext=()=>r.readAsArrayBuffer(f.slice(off,off+chunk)); readNext();
+function streamFileToPeer(f, c) {
+    const chunk = 16384;
+    let off = 0;
+    const r = new FileReader();
+
+    // WICHTIG: Wenn webkitRelativePath leer ist (Single File), müssen wir f.name senden!
+    // Sonst kommt beim Empfänger kein Dateiname/Endung an.
+    const nameToSend = f.webkitRelativePath || f.name;
+
+    r.onload = e => {
+        if(c.readyState !== 'open') return;
+        c.send(JSON.stringify({
+            type: 'FILE_CHUNK',
+            filename: nameToSend, // Hier stand vorher nur f.webkitRelativePath -> Fehler bei Single Files
+            data: arrayBufferToBase64(e.target.result),
+            isLast: (off + chunk >= f.size)
+        }));
+        off += chunk;
+        if(off < f.size) setTimeout(readNext, 5);
+    };
+
+    const readNext = () => r.readAsArrayBuffer(f.slice(off, off + chunk));
+    readNext();
 }
 function arrayBufferToBase64(b){ let binary=''; const bytes=new Uint8Array(b); for(let i=0;i<bytes.byteLength;i++)binary+=String.fromCharCode(bytes[i]); return window.btoa(binary); }
 function base64ToArrayBuffer(b){ const s=window.atob(b); const y=new Uint8Array(s.length); for(let i=0;i<s.length;i++)y[i]=s.charCodeAt(i); return y.buffer; }
