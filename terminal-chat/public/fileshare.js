@@ -297,7 +297,6 @@ function renderSidebar(shares) {
 function initiateConnectionWithPassword(peerId, password, itemInfo = null) {
     currentActivePeerId = peerId;
 
-    // Falls wir das Item nicht direkt bekommen haben (z.B. via Password Modal), holen wir es aus pending
     if (!itemInfo && peers[peerId]?.pendingItemInfo) {
         itemInfo = peers[peerId].pendingItemInfo;
     }
@@ -305,16 +304,18 @@ function initiateConnectionWithPassword(peerId, password, itemInfo = null) {
     if(password) knownPasswords[peerId] = password;
     const finalPassword = password || knownPasswords[peerId];
 
+    // Infos ermitteln
+    const isSingle = itemInfo ? itemInfo.isSingleFile : false;
+    const targetName = itemInfo ? itemInfo.folderName : "";
+
     // UI vorbereiten
-    if (itemInfo && itemInfo.isSingleFile) {
-        // PREVIEW MODE aktivieren
+    if (isSingle) {
         document.getElementById('fileGrid').style.display = 'none';
         document.getElementById('filePreview').style.display = 'flex';
-        document.getElementById('previewFileName').textContent = itemInfo.folderName; // Name des Mounts ist Dateiname
+        document.getElementById('previewFileName').textContent = targetName;
         document.getElementById('previewContent').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:20%;">[ DIRECT LINK ]<br>Requesting Single File...</div>';
         isPreviewMode = true;
     } else {
-        // GRID MODE aktivieren
         document.getElementById('filePreview').style.display = 'none';
         document.getElementById('fileGrid').style.display = 'grid';
         document.getElementById('fileGrid').innerHTML = '<div style="color:#0f0; text-align:center; margin-top:50px;">AUTHENTICATING...</div>';
@@ -325,30 +326,24 @@ function initiateConnectionWithPassword(peerId, password, itemInfo = null) {
     const p = peers[peerId];
     if (p && p.channel && p.channel.readyState === 'open') {
         console.log("Reusing channel.");
-
-        if (itemInfo && itemInfo.isSingleFile) {
-            // Direkt Datei anfragen
+        if (isSingle) {
             p.channel.send(JSON.stringify({
                 type: 'REQUEST_DOWNLOAD',
-                filename: itemInfo.folderName, // Der Mount-Name ist der virtuelle Pfad zur Datei
+                filename: targetName,
                 password: finalPassword
             }));
         } else {
-            // Root anfragen
             p.channel.send(JSON.stringify({ type: 'REQUEST_ROOT', password: finalPassword }));
         }
         return;
     }
 
-    // Neue Verbindung
+    // Neue Verbindung: Infos direkt übergeben!
     if(!peers[peerId]) peers[peerId] = {};
     peers[peerId].authPassword = finalPassword;
 
-    // Wir speichern, was wir öffnen wollen, damit setupChannelHandlers es weiß
-    peers[peerId].targetIsSingleFile = itemInfo ? itemInfo.isSingleFile : false;
-    peers[peerId].targetName = itemInfo ? itemInfo.folderName : "";
-
-    connectToPeer(peerId, finalPassword);
+    // WICHTIG: Hier übergeben wir isSingle und targetName als Parameter!
+    connectToPeer(peerId, finalPassword, isSingle, targetName);
 }
 
 function renderLocalGrid(items) {
@@ -618,20 +613,21 @@ function renderRemoteBlob(blob, filename) {
 
 // --- P2P CONNECTION LOGIC ---
 
-async function connectToPeer(targetId, password = null) {
-    // Zombie Killer nur, wenn wir nicht wiederverwenden
+// Signatur geändert: isSingleFile und targetName hinzugefügt
+async function connectToPeer(targetId, password = null, isSingleFile = false, targetName = "") {
     if (peers[targetId]) {
         if(peers[targetId].connection) peers[targetId].connection.close();
         delete peers[targetId];
     }
-    console.log(`Starting connection to ${targetId}...`);
+    console.log(`Starting connection to ${targetId}... (SingleFile: ${isSingleFile})`);
 
     const pc = new RTCPeerConnection(iceConfig);
     const channel = pc.createDataChannel("fileSystem");
     let iceQueue = [];
     let offerSent = false;
 
-    setupChannelHandlers(channel, targetId, password);
+    // WICHTIG: Infos weiterreichen an setupChannelHandlers
+    setupChannelHandlers(channel, targetId, password, isSingleFile, targetName);
 
     peers[targetId] = { connection: pc, channel: channel, pendingQueue: [] };
 
@@ -709,19 +705,17 @@ async function processPendingQueue(peerObj, pc) {
     }
 }
 
-function setupChannelHandlers(channel, peerId, password) {
+// Signatur geändert: Infos hinzugefügt
+function setupChannelHandlers(channel, peerId, password, isSingleFile, targetName) {
     channel.onopen = () => {
         console.log(`CHANNEL OPENED with ${peerId}`);
 
-        // Checken, was wir öffnen wollen (gespeichert in initiateConnection)
-        const isSingle = peers[peerId]?.targetIsSingleFile;
-        const targetName = peers[peerId]?.targetName;
-
-        if (isSingle) {
-            console.log("Requesting Direct Single File...");
+        // WICHTIG: Wir nutzen jetzt die Argumente der Funktion, nicht mehr das peers-Objekt!
+        if (isSingleFile) {
+            console.log("Requesting Direct Single File immediately...");
             channel.send(JSON.stringify({
                 type: 'REQUEST_DOWNLOAD',
-                filename: targetName, // MountName = Dateiname
+                filename: targetName,
                 password: password
             }));
         } else {
