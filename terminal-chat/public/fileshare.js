@@ -129,16 +129,14 @@ function confirmMount() {
     const password = document.getElementById('mountPassword').value;
     const allowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
 
-    // ERKENNUNG: Ist es ein einzelnes File?
-    // Einzelne Files haben oft keinen webkitRelativePath oder er ist leer
+    // ERKENNUNG: Ist es ein einzelnes File? (Hat oft keinen relativen Pfad)
     const isSingleFile = pendingFiles.length === 1 && (!pendingFiles[0].webkitRelativePath || pendingFiles[0].webkitRelativePath === "");
 
     // GLOBALS SETZEN
     myHostedFiles = pendingFiles;
     myRootFolderName = customName;
 
-    // WICHTIG: Bei Single Files ist der "echte" Root leer (wir mappen direkt auf den Dateinamen)
-    // Bei Ordnern nehmen wir den ersten Teil des Pfades.
+    // WICHTIG: Wenn Single File -> Real Root ist ein leerer String!
     myRealRootName = isSingleFile ? "" : pendingFiles[0].webkitRelativePath.split('/')[0];
     myMountPassword = password || null;
 
@@ -161,6 +159,7 @@ function confirmMount() {
     currentActivePeerId = socket.id;
     currentPathStr = customName;
 
+    // Grid sofort laden
     const items = getMappedLocalItems(currentPathStr);
     renderLocalGrid(items);
     updateBreadcrumbs(['ROOT', customName]);
@@ -172,7 +171,7 @@ function confirmMount() {
         username: user,
         allowedUsers: allowedUsers,
         isProtected: !!password,
-        isSingleFile: isSingleFile // <--- NEU: Flag senden
+        isSingleFile: isSingleFile
     });
 }
 
@@ -510,21 +509,30 @@ function closePreview() {
 
 function mapVirtualToReal(virtualPath) {
     if (!virtualPath) return "";
-    if (myRootFolderName && myRealRootName && virtualPath.startsWith(myRootFolderName)) {
-        return virtualPath.replace(myRootFolderName, myRealRootName);
+
+    // Wenn wir im Root des virtuellen Drives suchen (z.B. "MeinDrive")
+    if (virtualPath === myRootFolderName) {
+        return myRealRootName; // Gib "" zurück bei SingleFile oder "EchterOrdner" bei Ordnern
+    }
+
+    // Wenn wir in Unterordnern suchen (z.B. "MeinDrive/Sub")
+    if (myRootFolderName && virtualPath.startsWith(myRootFolderName + '/')) {
+        const relative = virtualPath.substring(myRootFolderName.length + 1);
+        return myRealRootName ? `${myRealRootName}/${relative}` : relative;
     }
     return virtualPath;
 }
 
 function mapRealToVirtual(realPath) {
-    // Wenn Single File (RealRootName ist leer)
+    if (!realPath && myRealRootName === "") return myRootFolderName; // Single File Root
+
+    // Single File Fall: realPath ist "bild.png" -> Virtual: "MeinDrive/bild.png"
     if (myRealRootName === "") {
-        return myRootFolderName + (realPath ? '/' + realPath : '');
+        return `${myRootFolderName}/${realPath}`;
     }
 
-    if (!realPath) return "";
-    if (realPath === myRealRootName) return myRootFolderName;
-    if (realPath.startsWith(myRealRootName + '/')) {
+    // Ordner Fall
+    if (realPath.startsWith(myRealRootName)) {
         return realPath.replace(myRealRootName, myRootFolderName);
     }
     return realPath;
@@ -717,15 +725,25 @@ function handleChannelMessage(msg, peerId, channel) {
     }
 
     if (msg.type === 'REQUEST_DOWNLOAD') {
+        // 1. Pfad übersetzen
         const realPath = mapVirtualToReal(msg.filename);
-        // Robustere Suche: Prüfe Pfad UND Name
+
+        // 2. Datei suchen
+        // Wir suchen entweder nach dem exakten Pfad ODER (als Fallback) nur nach dem Dateinamen
         let file = myHostedFiles.find(f => (f.webkitRelativePath || f.name) === realPath);
 
-        // Fallback: Nur nach Dateinamen suchen
-        if(!file) file = myHostedFiles.find(f => f.name === msg.filename.split('/').pop());
+        // Fallback: Wenn Pfad-Matching fehlschlägt, nimm den Dateinamen (gut für Single Files)
+        if (!file) {
+            const requestedName = msg.filename.split('/').pop();
+            file = myHostedFiles.find(f => f.name === requestedName);
+        }
 
-        if (file) streamFileToPeer(file, channel);
-        else channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found.' }));
+        if (file) {
+            streamFileToPeer(file, channel);
+        } else {
+            console.error(`[HOST] File not found: ${msg.filename} (Real: ${realPath})`);
+            channel.send(JSON.stringify({ type: 'ERROR', message: 'File not found on host.' }));
+        }
     }
 
     if (msg.type === 'REQUEST_RECURSIVE_LIST') {
@@ -812,17 +830,20 @@ function getItemsInPath(files, currentPath) {
     const items = [];
     const knownFolders = new Set();
 
+    // Normalisiere den Suchpfad (leere Strings bleiben leer)
+    const searchPath = currentPath || "";
+
     files.forEach(file => {
-        // Fallback: Wenn webkitRelativePath leer ist (Single File), nimm den Namen
+        // Fallback für Single Files: Wenn webkitRelativePath fehlt, nimm den Dateinamen
         const fullPath = file.webkitRelativePath || file.name;
 
-        // Fall 1: Wir sind im Root (currentPath ist leer)
-        if (!currentPath) {
+        // CHECK 1: Sind wir im Root? (searchPath ist leer)
+        if (searchPath === "") {
             if (!fullPath.includes('/')) {
-                // Es ist eine Datei direkt im Root (Single File)
+                // Datei liegt direkt im Root -> Hinzufügen!
                 items.push({ name: fullPath, type: 'file', size: file.size, fullPath: fullPath });
             } else {
-                // Es ist ein Ordner im Root
+                // Datei liegt in einem Unterordner -> Ordner hinzufügen
                 const folderName = fullPath.split('/')[0];
                 if (!knownFolders.has(folderName)) {
                     knownFolders.add(folderName);
@@ -832,24 +853,26 @@ function getItemsInPath(files, currentPath) {
             return;
         }
 
-        // Fall 2: Wir sind in einem Unterordner
-        if (fullPath.startsWith(currentPath + '/')) {
-            const relativePart = fullPath.substring(currentPath.length + 1);
+        // CHECK 2: Sind wir in einem Unterordner?
+        if (fullPath.startsWith(searchPath + '/')) {
+            const relativePart = fullPath.substring(searchPath.length + 1);
             const parts = relativePart.split('/');
 
             if (parts.length === 1) {
+                // Direkte Datei im Unterordner
                 if(parts[0] !== "") items.push({ name: parts[0], type: 'file', size: file.size, fullPath: fullPath });
             } else {
+                // Noch ein Unterordner
                 const folderName = parts[0];
                 if (!knownFolders.has(folderName)) {
                     knownFolders.add(folderName);
-                    items.push({ name: folderName, type: 'folder', fullPath: currentPath + '/' + folderName });
+                    items.push({ name: folderName, type: 'folder', fullPath: searchPath + '/' + folderName });
                 }
             }
         }
     });
 
-    // Duplikate filtern
+    // Duplikate entfernen (Sicherheitsnetz)
     return items.filter((v,i,a) => a.findIndex(t => (t.name === v.name && t.type === v.type)) === i);
 }
 
