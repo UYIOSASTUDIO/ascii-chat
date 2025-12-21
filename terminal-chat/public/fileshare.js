@@ -23,6 +23,7 @@ let latestSharesList = {};
 let myAllowedUsers = [];
 let isEditMode = false;
 let isSingleFileGlobal = false; // Wir merken uns das Flag global
+let myAllowedGroups = [];
 
 // --- WEBRTC CONFIG ---
 const peers = {};
@@ -75,6 +76,40 @@ socket.on('fs_update_shares', (sharesList) => {
     renderSidebar();
 });
 
+// Server schickt uns die Liste der Gruppen, in denen wir sind
+socket.on('fs_group_list', (groups) => {
+    const container = document.getElementById('groupListContainer');
+    container.innerHTML = '';
+
+    if(!groups || groups.length === 0) {
+        container.innerHTML = '<span style="color:#555;">You are not in any groups.</span>';
+        return;
+    }
+
+    groups.forEach(group => {
+        // Label erstellen
+        const label = document.createElement('label');
+        label.className = 'group-checkbox';
+
+        // Checkbox
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.value = group;
+
+        // Wenn wir im Edit-Mode sind, Checkbox aktivieren falls schon ausgewählt
+        if (isEditMode && myAllowedGroups.includes(group)) {
+            checkbox.checked = true;
+        }
+
+        const span = document.createElement('span');
+        span.innerText = group;
+
+        label.appendChild(checkbox);
+        label.appendChild(span);
+        container.appendChild(label);
+    });
+});
+
 // NEU: Event Listener für die Suche
 document.getElementById('driveSearch').addEventListener('input', () => {
     renderSidebar(); // Neu rendern bei jedem Tastendruck
@@ -87,32 +122,36 @@ socket.on('p2p_signal', async (data) => {
 // --- MOUNT MODAL LOGIC ---
 
 function triggerMount() {
-    isEditMode = false; // Wir mounten neu
+    isEditMode = false;
     document.getElementById('mountModal').style.display = 'flex';
     document.getElementById('modalTitle').innerText = "MOUNT CONFIGURATION";
-    document.getElementById('fileSelectionArea').style.display = 'flex'; // Datei-Wahl anzeigen
+    document.getElementById('fileSelectionArea').style.display = 'flex';
     document.getElementById('btnConfirmMount').innerText = "[ MOUNT DRIVE ]";
 
-    // Reset Fields
     document.getElementById('mountName').value = '';
     document.getElementById('mountAllowedUsers').value = '';
     document.getElementById('mountPassword').value = '';
     document.getElementById('selectedFolderName').textContent = 'No content selected';
     pendingFiles = null;
+
+    // NEU: Gruppen abfragen
+    document.getElementById('groupListContainer').innerHTML = '<span style="color:#555;">Loading...</span>';
+    socket.emit('fs_request_groups');
 }
 
 function triggerEdit() {
-    isEditMode = true; // Wir editieren nur
+    isEditMode = true;
     document.getElementById('mountModal').style.display = 'flex';
     document.getElementById('modalTitle').innerText = "EDIT CONFIGURATION";
-    document.getElementById('fileSelectionArea').style.display = 'none'; // Datei-Wahl ausblenden
+    document.getElementById('fileSelectionArea').style.display = 'none';
     document.getElementById('btnConfirmMount').innerText = "[ PUBLISH EDITS ]";
 
-    // Felder mit aktuellen Werten füllen
     document.getElementById('mountName').value = myRootFolderName;
     document.getElementById('mountAllowedUsers').value = myAllowedUsers.join(', ');
-    // Passwort füllen (oder leer lassen, sicherheitshalber leer lassen oder Platzhalter)
     document.getElementById('mountPassword').value = myMountPassword || "";
+
+    // NEU: Gruppen abfragen
+    socket.emit('fs_request_groups');
 }
 
 function closeMountModal() {
@@ -145,50 +184,43 @@ if(hiddenInput) {
 }
 
 function confirmMount() {
-    // FALL 1: NEUER MOUNT (Dateien müssen gewählt sein)
     if (!isEditMode) {
         if (!pendingFiles || pendingFiles.length === 0) {
             alert("Please select a folder or file first.");
             return;
         }
-        // Daten aus Input übernehmen
         myHostedFiles = pendingFiles;
-
-        // Check: Single File?
         isSingleFileGlobal = pendingFiles.length === 1 && (!pendingFiles[0].webkitRelativePath || pendingFiles[0].webkitRelativePath === "");
-
-        // Real Root setzen
         myRealRootName = isSingleFileGlobal ? "" : pendingFiles[0].webkitRelativePath.split('/')[0];
     }
 
-    // FALL 2: EDIT MODE (Dateien bleiben gleich, wir lesen sie NICHT neu ein)
-    // Wir nutzen einfach die existierenden `myHostedFiles`, `myRealRootName` und `isSingleFileGlobal` weiter.
-
-    // GEMEINSAME LOGIK (Daten aus Formular lesen)
     const customName = document.getElementById('mountName').value || "Unnamed Drive";
     const allowedStr = document.getElementById('mountAllowedUsers').value;
     const password = document.getElementById('mountPassword').value;
 
-    // Globals updaten
+    // USERS PARSEN
     myAllowedUsers = allowedStr ? allowedStr.split(',').map(s => s.trim()).filter(Boolean) : [];
+
+    // NEU: GRUPPEN EINSAMMELN
+    myAllowedGroups = [];
+    const checkboxes = document.querySelectorAll('#groupListContainer input[type="checkbox"]:checked');
+    checkboxes.forEach(cb => myAllowedGroups.push(cb.value));
+
     myRootFolderName = customName;
     myMountPassword = password || null;
 
-    console.log(`[${isEditMode ? 'EDIT' : 'MOUNT'}] Name: "${customName}" | Protected: ${!!password}`);
+    console.log(`[${isEditMode ? 'EDIT' : 'MOUNT'}] Name: "${customName}" | Groups: ${myAllowedGroups.length}`);
 
     closeMountModal();
 
-    // UI Buttons Update
     document.getElementById('btnMount').style.display = 'none';
     const unmountBtn = document.getElementById('btnUnmount');
-    const editBtn = document.getElementById('btnEdit'); // Den neuen Button holen
+    const editBtn = document.getElementById('btnEdit');
 
     unmountBtn.style.display = 'block';
     unmountBtn.innerText = `[-] UNMOUNT`;
+    editBtn.style.display = 'block';
 
-    editBtn.style.display = 'block'; // Edit Button anzeigen
-
-    // UI Reset (Nur bei neuem Mount nötig, aber schadet bei Edit nicht, um Namen zu refreshen)
     if (!isEditMode) {
         document.getElementById('filePreview').style.display = 'none';
         document.getElementById('fileGrid').style.display = 'grid';
@@ -198,7 +230,6 @@ function confirmMount() {
         currentActivePeerId = socket.id;
     }
 
-    // Breadcrumbs & Title update (falls wir gerade im eigenen Ordner sind)
     if (currentActivePeerId === socket.id) {
         currentPathStr = customName;
         document.querySelectorAll('.share-item').forEach(el => el.classList.remove('active'));
@@ -212,12 +243,12 @@ function confirmMount() {
         }
     }
 
-    // SERVER UPDATE SENDEN
-    // Der Server überschreibt einfach die Daten für unseren Socket -> Perfektes Update
+    // SERVER UPDATE (Jetzt mit allowedGroups!)
     socket.emit('fs_start_hosting', {
         folderName: customName,
         username: user,
         allowedUsers: myAllowedUsers,
+        allowedGroups: myAllowedGroups, // <--- HIER NEU
         isProtected: !!password,
         isSingleFile: isSingleFileGlobal
     });

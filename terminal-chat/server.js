@@ -2557,10 +2557,19 @@ io.on('connection', (socket) => {
             key: socket.id.substr(0, 5),
             folderName: data.folderName,
             allowedUsers: data.allowedUsers || [],
+            allowedGroups: data.allowedGroups || [], // <--- NEU
             isProtected: data.isProtected || false,
-            isSingleFile: data.isSingleFile || false // <--- NEU: Typ speichern
+            isSingleFile: data.isSingleFile || false
         };
         broadcastShares();
+    });
+
+    // Client fragt: In welchen Gruppen bin ich?
+    socket.on('fs_request_groups', () => {
+        // socket.rooms ist ein Set mit allen Räumen (inklusive eigener Socket-ID)
+        // Wir filtern die Socket-ID raus, der Rest sind Gruppen
+        const rooms = Array.from(socket.rooms).filter(r => r !== socket.id);
+        socket.emit('fs_group_list', rooms);
     });
 
     // 2. User stoppt Share
@@ -2583,37 +2592,46 @@ io.on('connection', (socket) => {
 
     // INTELLIGENTES BROADCASTING (Sichtbarkeit filtern)
     function broadcastShares() {
-        const connectedSockets = io.sockets.sockets; // Map aller Sockets
+        const connectedSockets = io.sockets.sockets;
 
-        // Wir gehen durch jeden verbundenen Nutzer und bauen ihm seine individuelle Liste
         connectedSockets.forEach((recipientSocket) => {
             const sharesVisibleToUser = {};
 
             Object.keys(activeShares).forEach(hostId => {
                 const share = activeShares[hostId];
 
-                // Regel 1: Ich sehe meine eigenen Shares
+                // Regel 1: Eigene Shares
                 if (hostId === recipientSocket.id) {
                     sharesVisibleToUser[hostId] = share;
                     return;
                 }
 
-                // Regel 2: Wenn allowedUsers leer ist -> Für alle sichtbar
-                if (!share.allowedUsers || share.allowedUsers.length === 0) {
+                // Regel 2: Public Share (Keine User UND keine Gruppen definiert)
+                const isPublic = (!share.allowedUsers || share.allowedUsers.length === 0) &&
+                    (!share.allowedGroups || share.allowedGroups.length === 0);
+
+                if (isPublic) {
                     sharesVisibleToUser[hostId] = share;
                     return;
                 }
 
-                // Regel 3: Steht meine ID (recipientSocket.id) in der allowed Liste?
-                // Wir prüfen auch auf Substrings, falls User nur kurze IDs eingeben
-                const isAllowed = share.allowedUsers.some(allowedId => recipientSocket.id.includes(allowedId));
+                // Regel 3: User ID Check
+                const isUserAllowed = share.allowedUsers && share.allowedUsers.some(allowedId => recipientSocket.id.includes(allowedId));
 
-                if (isAllowed) {
+                // Regel 4: Gruppen Check (NEU)
+                // Ist der Empfänger in einer der erlaubten Gruppen?
+                // recipientSocket.rooms ist ein Set
+                let isGroupAllowed = false;
+                if (share.allowedGroups && share.allowedGroups.length > 0) {
+                    isGroupAllowed = share.allowedGroups.some(groupName => recipientSocket.rooms.has(groupName));
+                }
+
+                // ZUGRIFF?
+                if (isUserAllowed || isGroupAllowed) {
                     sharesVisibleToUser[hostId] = share;
                 }
             });
 
-            // Sende die gefilterte Liste an diesen Nutzer
             recipientSocket.emit('fs_update_shares', sharesVisibleToUser);
         });
     }
