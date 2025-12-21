@@ -268,11 +268,33 @@ function renderSidebar(shares) {
     const searchTerm = document.getElementById('driveSearch').value.toLowerCase();
     const allIds = Object.keys(dataToRender);
 
-    const filteredIds = allIds.filter(id => {
+    // 1. FILTERN (Suche)
+    let filteredIds = allIds.filter(id => {
         const item = dataToRender[id];
         return item.folderName.toLowerCase().includes(searchTerm) ||
             item.username.toLowerCase().includes(searchTerm) ||
             id.toLowerCase().includes(searchTerm);
+    });
+
+    // 2. SORTIEREN (Die neue Logik)
+    filteredIds.sort((a, b) => {
+        const itemA = dataToRender[a];
+        const itemB = dataToRender[b];
+
+        // Regel 1: Mein eigener Upload immer ganz oben
+        if (a === socket.id) return -1;
+        if (b === socket.id) return 1;
+
+        // Regel 2: "Specific Shares" (an mich gerichtet) vor "Public Shares"
+        // Wir prüfen: Hat die Liste Einträge UND bin ich (oder meine ID) darin enthalten?
+        const aIsDirect = itemA.allowedUsers && itemA.allowedUsers.length > 0 && itemA.allowedUsers.some(u => socket.id.includes(u));
+        const bIsDirect = itemB.allowedUsers && itemB.allowedUsers.length > 0 && itemB.allowedUsers.some(u => socket.id.includes(u));
+
+        if (aIsDirect && !bIsDirect) return -1; // A nach oben
+        if (!aIsDirect && bIsDirect) return 1;  // B nach oben
+
+        // Regel 3: Ansonsten alphabetisch nach Ordnername (optional, sieht aber ordentlicher aus)
+        return itemA.folderName.localeCompare(itemB.folderName);
     });
 
     if (filteredIds.length === 0) {
@@ -280,6 +302,7 @@ function renderSidebar(shares) {
         return;
     }
 
+    // 3. RENDERN
     filteredIds.forEach(socketId => {
         const item = dataToRender[socketId];
         const isMe = (socketId === socket.id);
@@ -290,12 +313,18 @@ function renderSidebar(shares) {
         if (socketId === currentActivePeerId) li.classList.add('active');
         if (isMe) li.style.cssText += 'color:#0f0; border-left:4px solid #0f0;';
 
+        // ICONS
         const lockIcon = isLocked ? '🔒 ' : '';
         const typeIcon = item.isSingleFile ? '📄 ' : '📁 ';
         const idDisplay = `<span style="font-size:0.7em; color:#444;">[ID: ${socketId.substr(0,5)}]</span>`;
 
+        // Zusatz-Info für "Shared with me" (Optional: Ein kleines Sternchen oder Text)
+        // Wir können prüfen, ob es ein Direct Share ist, um es visuell hervorzuheben
+        const isDirectShare = !isMe && item.allowedUsers && item.allowedUsers.length > 0;
+        const directMarker = isDirectShare ? '<span style="color:orange; font-size:0.8em; margin-left:5px;">★</span>' : '';
+
         li.innerHTML = `
-            <span class="share-name">${lockIcon}${typeIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}</span>
+            <span class="share-name">${lockIcon}${typeIcon}${isMe ? item.folderName + ' (LOCAL)' : item.folderName}${directMarker}</span>
             <span class="share-user">${isMe ? 'HOSTED BY YOU' : item.username} ${idDisplay}</span>
         `;
 
@@ -304,30 +333,25 @@ function renderSidebar(shares) {
             li.classList.add('active');
 
             if (isMe) {
-                // LOCAL LOGIC
+                // LOCAL
                 currentActivePeerId = socketId;
                 currentPathStr = item.folderName;
 
                 if (item.isSingleFile) {
-                    // DIREKT ÖFFNEN (Lokal)
-                    // Bei SingleFile ist myHostedFiles[0] die Datei
                     openFile(myHostedFiles[0]);
                 } else {
-                    // ORDNER ÖFFNEN
                     document.getElementById('filePreview').style.display = 'none';
                     document.getElementById('fileGrid').style.display = 'grid';
                     renderLocalGrid(getMappedLocalItems(currentPathStr));
                     updateBreadcrumbs(['ROOT', item.folderName]);
                 }
             } else {
-                // REMOTE LOGIC
-                // Wir übergeben jetzt das ganze Item, damit wir wissen ob es ein SingleFile ist
+                // REMOTE
                 if (item.isProtected) {
                     if (knownPasswords[socketId]) {
                         initiateConnectionWithPassword(socketId, knownPasswords[socketId], item);
                     } else {
                         targetPeerForPassword = socketId;
-                        // Zwischenspeichern des Items für später (nach Passworteingabe)
                         peers[socketId] = { ...peers[socketId], pendingItemInfo: item };
                         document.getElementById('passwordModal').style.display = 'flex';
                         document.getElementById('accessPassword').focus();
