@@ -698,7 +698,7 @@ io.on('connection', (socket) => {
             room.members = room.members.filter(id => id !== socket.id);
             user.currentPub = null;
 
-            // 3. Leave Event an verbleibende User senden
+            // 3. Leave Event an verbleibende User senden (nur wenn noch wer da ist)
             if (room.members.length > 0) {
                 io.to(`pub_${pubId}`).emit('room_user_status', {
                     username: user.username,
@@ -711,19 +711,19 @@ io.on('connection', (socket) => {
 
             // 4. CHECK: IST DER RAUM LEER?
             if (room.members.length === 0) {
-                // WICHTIG: Explizit löschen, bevor wir reorganisieren!
+                // Explizit löschen!
                 delete publicRooms[pubId];
                 serverLog(`Public Sector ${pubId} collapsed (Empty).`);
             }
 
-            // 5. Jetzt aufräumen/sortieren (schließt Lücken)
+            // 5. IMMER reorganisieren (schließt Lücken und bereinigt)
             reorganizePublicRooms();
         } else {
-            // Falls Raum nicht gefunden (Datenfehler), user trotzdem resetten
+            // Falls Raum-Daten korrupt waren, User trotzdem resetten
             user.currentPub = null;
         }
 
-        // 6. Bestätigung an Client (damit er auf LOCAL wechselt)
+        // 6. Bestätigung an Client senden (DAS LÖST DEIN PROBLEM ZUSAMMEN MIT SCHRITT 1)
         socket.emit('pub_left_success');
     });
 

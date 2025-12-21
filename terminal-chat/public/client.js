@@ -1584,6 +1584,24 @@ socket.on('group_left_success', () => {
     }
 });
 
+// PUB LEAVE ERFOLGREICH (Client aufräumen)
+socket.on('pub_left_success', () => {
+    // 1. Die ID des aktuellen Public Chats finden
+    const currentPubId = Object.keys(myChats).find(k => myChats[k].type === 'pub' && activeChatId === k);
+
+    // 2. Chat löschen und UI wechseln
+    if (currentPubId) {
+        deleteChat(currentPubId); // Löscht Chat aus der Liste und dem Speicher
+    }
+
+    // 3. Zurück zur Konsole, falls wir noch im Chat-Fenster hängen
+    if (activeChatId !== 'LOCAL') {
+        switchChat('LOCAL');
+    }
+
+    printLine('>>> DISCONNECTED FROM SECTOR. LOCAL SHELL ACTIVE.', 'system-msg');
+});
+
 // EVENT: GRUPPEN-NAME GEÄNDERT
 socket.on('group_name_changed', (data) => {
     // data: { id, newName }
