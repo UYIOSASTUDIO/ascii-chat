@@ -261,6 +261,27 @@ html, body {
     background: transparent;
 }
 
+/* --- NOTFALL CURSOR FIX --- */
+.cursor-block {
+    display: inline-block;
+    background-color: #4af626; /* Dein Terminal Grün */
+    color: #000;
+    min-width: 0.6em;
+    white-space: pre-wrap;
+    animation: blink 1s step-end infinite;
+}
+
+#command-input {
+    color: transparent; /* Text unsichtbar */
+    caret-color: transparent; /* Strich-Cursor weg */
+    z-index: 2;
+}
+
+#cmd-mirror {
+    z-index: 1;
+    color: #e0e0e0; /* Text sichtbar */
+}
+
 .input-wrapper.focused #cursor-block {
     background-color: var(--accent-color);
     border: none;
@@ -344,7 +365,34 @@ html, body {
 ::-webkit-scrollbar-thumb:hover { background: #666; }
 
 /* --- ANIMATIONEN --- */
-@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+/* --- CURSOR ANIMATION (Invertieren statt Ausblenden) --- */
+@keyframes blink {
+    0%, 100% {
+        /* Cursor sichtbar: Grüner Block, Schwarzer Text */
+        background-color: var(--accent-color);
+        color: #000;
+        box-shadow: 0 0 5px var(--accent-dim); /* Optional: Leichter Glow */
+    }
+    50% {
+        /* Cursor unsichtbar: Transparenter Block, Normaler Text */
+        background-color: transparent;
+        color: var(--text-main); /* Hier nimmt er die normale Textfarbe an */
+        box-shadow: none;
+    }
+}
+
+.cursor-block {
+    display: inline-block;
+    min-width: 0.6em;
+    white-space: pre-wrap;
+
+    /* WICHTIG: Animation anwenden */
+    animation: blink 1s step-end infinite;
+
+    /* Start-Zustand sicherstellen */
+    background-color: var(--accent-color);
+    color: #000;
+}
 
 /* --- DRAG & DROP OVERLAY --- */
 #drop-overlay {

@@ -464,79 +464,98 @@ async function runBootSequence() {
 }
 
 // =============================================================================
-// 4. INPUT & COMMAND HANDLER (FINAL: AUTO-GROW, HISTORY & BLOCK CURSOR)
+// 4. INPUT & COMMAND HANDLER (FINAL: MOUSE DRAG SUPPORT)
 // =============================================================================
 
-// Falls cmdMirror noch nicht global definiert ist, hier sicherheitshalber holen:
-// const cmdMirror = document.getElementById('cmd-mirror');
-
-// 1. Funktion: Spiegelbild & Cursor visuell updaten
+// Funktion: Spiegelbild & Cursor visuell updaten
 function updateMirror() {
-    const text = input.value;
-    const caretPos = input.selectionStart;
+    const inp = document.getElementById('command-input');
+    const mir = document.getElementById('cmd-mirror');
 
-    // Text aufteilen: Vor dem Cursor | Zeichen unterm Cursor | Nach dem Cursor
+    if (!inp || !mir) return;
+
+    const text = inp.value;
+
+    // --- CURSOR POSITION BESTIMMEN ---
+    let caretPos = inp.selectionStart;
+
+    // Check: In welche Richtung wurde markiert?
+    // 'forward' = Von Links nach Rechts -> Cursor muss ans Ende (Rechts)
+    // 'backward' oder 'none' = Von Rechts nach Links -> Cursor muss an den Anfang (Links)
+    if (inp.selectionDirection === 'forward') {
+        caretPos = inp.selectionEnd;
+    }
+
+    // Text aufteilen
     const left = text.slice(0, caretPos);
     let current = text.slice(caretPos, caretPos + 1);
     const right = text.slice(caretPos + 1);
 
-    // Wenn wir am Ende sind oder Zeilenumbruch, nehmen wir ein Leerzeichen für den Block
+    // Cursor-Block Logik (Leere Zeichen / Zeilenumbrüche abfangen)
     if (current === '' || current === '\n') {
         if (current === '\n') {
-            // Spezialfall: Cursor steht auf einem Enter -> Wir müssen den Block UND das Enter rendern
-            current = ' \n';
+            current = ' \n'; // Block + Zeilenumbruch rendern
         } else {
             current = ' '; // Leerer Block am Ende
         }
     }
 
-    // HTML bauen (Zeichen schützen!)
+    // HTML Safe machen
     const escape = (str) => str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-    cmdMirror.innerHTML = escape(left) +
+    // Rendern
+    mir.innerHTML = escape(left) +
         `<span class="cursor-block">${escape(current)}</span>` +
         escape(right);
 
-    // Scroll-Synchronisation: Wenn Input scrollt, muss Mirror mitscrollen
-    cmdMirror.scrollTop = input.scrollTop;
+    // Sync Scroll
+    mir.scrollTop = inp.scrollTop;
 }
 
-// 2. Event Listeners für visuelle Updates & Auto-Grow
-['input', 'keydown', 'keyup', 'click', 'scroll', 'focus'].forEach(evt => {
-    input.addEventListener(evt, (e) => {
-        // A) Auto-Grow Logik
-        input.style.height = 'auto';
-        input.style.height = (input.scrollHeight) + 'px';
-        if (input.value === '') input.style.height = 'auto';
+// Event Listeners aktivieren
+const inputField = document.getElementById('command-input');
+if (inputField) {
+    // WICHTIG: Hier sind jetzt 'mousemove', 'mouseup' und 'select' dabei!
+    // Das sorgt dafür, dass der Cursor auch WÄHREND des Markierens mit der Maus live wandert.
+    const events = ['input', 'keydown', 'keyup', 'click', 'scroll', 'focus', 'mousedown', 'mouseup', 'mousemove', 'select'];
 
-        // B) Mirror Update (Block Cursor)
-        updateMirror();
+    events.forEach(evt => {
+        inputField.addEventListener(evt, (e) => {
+            // Performance: Bei 'mousemove' nur updaten, wenn die Maus gedrückt ist (Button 1)
+            if (evt === 'mousemove' && e.buttons !== 1) return;
 
-        // C) History Reset: Nur wenn der User SELBST tippt (nicht per Skript/History)
-        if (evt === 'input' && e.isTrusted) {
-            historyIndex = commandHistory.length;
-        }
+            // A) Auto-Grow
+            inputField.style.height = 'auto';
+            inputField.style.height = (inputField.scrollHeight) + 'px';
+            if (inputField.value === '') inputField.style.height = 'auto';
+
+            // B) Visual Update
+            updateMirror();
+
+            // C) History Reset (nur beim echten Tippen)
+            if (evt === 'input' && e.isTrusted) {
+                historyIndex = commandHistory.length;
+            }
+        });
     });
-});
 
-input.addEventListener('blur', () => inputWrapper.classList.remove('focused'));
-input.addEventListener('focus', () => inputWrapper.classList.add('focused'));
+    // Initialer Aufruf
+    setTimeout(updateMirror, 100);
+}
 
-// 3. Logik-Handler (Senden & History Navigation)
-input.addEventListener('keydown', async (e) => {
-    // A) SENDEN (Enter ohne Shift)
+// ENTER & HISTORY LOGIK
+inputField.addEventListener('keydown', async (e) => {
+    // SENDEN (Enter)
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
-        const val = input.value.trim();
-
+        const val = inputField.value.trim();
         if (val) {
             commandHistory.push(val);
             historyIndex = commandHistory.length;
 
-            // UI Reset
-            input.value = '';
-            input.style.height = 'auto';
-            updateMirror(); // Cursor sofort zurücksetzen
+            inputField.value = '';
+            inputField.style.height = 'auto';
+            updateMirror();
 
             if (!appState.startsWith('DECIDING')) {
                 const displayVal = val.replace(/\n/g, '<br>');
@@ -544,51 +563,41 @@ input.addEventListener('keydown', async (e) => {
             }
             await handleInput(val);
         } else {
-            input.value = '';
-            input.style.height = 'auto';
+            inputField.value = '';
             updateMirror();
         }
     }
-
-    // B) HISTORY ZURÜCK (Pfeil Rauf)
+    // HISTORY HOCH
     else if (e.key === 'ArrowUp') {
-        // Erlaubt, wenn Feld leer ist ODER wir schon blättern
-        if (input.value === '' || historyIndex !== commandHistory.length) {
+        if (inputField.value === '' || historyIndex !== commandHistory.length) {
             if (historyIndex > 0) {
                 e.preventDefault();
                 historyIndex--;
-                input.value = commandHistory[historyIndex];
-
-                // Cursor ans Ende + Visual Update triggern
+                inputField.value = commandHistory[historyIndex];
                 setTimeout(() => {
-                    input.selectionStart = input.selectionEnd = input.value.length;
-                    // WICHTIG: Löst das 'input' Event oben aus -> updated Mirror & Höhe
-                    input.dispatchEvent(new Event('input', { bubbles: true }));
+                    inputField.selectionStart = inputField.selectionEnd = inputField.value.length;
+                    // Event triggern für Update
+                    inputField.dispatchEvent(new Event('input', { bubbles: true }));
                 }, 0);
             }
         }
     }
-
-    // C) HISTORY VOR (Pfeil Runter)
+    // HISTORY RUNTER
     else if (e.key === 'ArrowDown') {
-        if (input.value === '' || historyIndex !== commandHistory.length) {
+        if (inputField.value === '' || historyIndex !== commandHistory.length) {
             if (historyIndex < commandHistory.length - 1) {
                 historyIndex++;
-                input.value = commandHistory[historyIndex];
+                inputField.value = commandHistory[historyIndex];
             } else {
                 historyIndex = commandHistory.length;
-                input.value = '';
+                inputField.value = '';
             }
-
             setTimeout(() => {
-                input.dispatchEvent(new Event('input', { bubbles: true }));
+                inputField.dispatchEvent(new Event('input', { bubbles: true }));
             }, 0);
         }
     }
 });
-
-// Initialer Aufruf
-updateMirror();
 
 async function handleInput(text) {
     if (appState === 'BOOTING') {
