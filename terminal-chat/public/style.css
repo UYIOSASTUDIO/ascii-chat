@@ -1,644 +1,370 @@
-@import url('https://fonts.googleapis.com/css2?family=VT323&display=swap');
+/* --- MODERN TERMINAL THEME --- */
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&display=swap');
 
-/* --- GLOBALE RESETS & VARIABLEN --- */
 :root {
-    /* Hier definieren wir den dicken, weißen Rahmen */
-    --border-thick: 1px solid #fff;
-    --bg-color: #000;
-    --text-color: #0f0; /* Standard Hacker-Grün für Text */
-    --header-text-color: #fff; /* Weiß für Header & Rahmen */
+    /* Modernes Farbschema */
+    --bg-color: #1a1a1a;           /* Elegantes Anthrazit */
+    --panel-bg: #222222;           /* Etwas helleres Grau für Sidebars */
+    --text-main: #e0e0e0;          /* Fast Weiß für Text */
+    --text-muted: #888888;         /* Grau für Infos */
+    --accent-color: #4af626;       /* Dein Grün, aber frischer */
+    --accent-dim: rgba(74, 246, 38, 0.15);
+
+    /* Rahmen: Dünn und elegant statt dick und blockig */
+    --border-color: rgba(255, 255, 255, 0.12);
+    --border-thick: 1px solid var(--border-color); /* Deine Variable, aber modern */
+
+    --font-stack: 'Fira Code', 'Courier New', monospace;
 }
 
 * {
     box-sizing: border-box;
     margin: 0;
     padding: 0;
-    /* WICHTIG: Nirgendwo runde Ecken! */
-    border-radius: 0 !important;
     scrollbar-width: thin;
-    scrollbar-color: var(--text-color) var(--bg-color);
+    scrollbar-color: #444 var(--bg-color);
 }
-/*
-body {
-    background-color: #0d0d0d;
-    color: #f5f5f5;
-    font-family: 'VT323', monospace;
-    margin: 0;
-    padding: 0;
-    height: 100%;
-    width: 100%;
-    overflow: hidden;
-}
-*/
 
 html, body {
     height: 100%;
     width: 100%;
     background-color: var(--bg-color);
-    color: var(--text-color);
-    font-family: 'VT323', monospace;
+    color: var(--text-main);
+    font-family: var(--font-stack);
+    font-size: 14px; /* Etwas kleiner/feiner als VT323 */
     display: flex;
-    flex-direction: column; /* Wichtig, damit Header über dem Rest steht */
-    overflow: hidden; /* Kein Scrollen auf dem Body */
+    flex-direction: column;
+    overflow: hidden;
 }
 
-/* Der CRT (Röhrenmonitor) Effekt */
-.crt-overlay {
-    position: fixed;
-    top: 0; left: 0; width: 100%; height: 100%;
-    background: linear-gradient(rgba(18, 16, 16, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06));
-    background-size: 100% 2px, 3px 100%;
-    pointer-events: none;
-    z-index: 999;
-}
-
+/* --- HEADER --- */
 .top-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 10px 15px;
+    padding: 12px 20px;
     background-color: var(--bg-color);
-    color: var(--header-text-color);
-    font-weight: bold;
-    /* Dicker Rahmen unten */
+    color: var(--text-muted);
+    font-weight: 500;
     border-bottom: var(--border-thick);
-    flex-shrink: 0; /* Darf nicht schrumpfen */
+    flex-shrink: 0;
     text-transform: uppercase;
-    letter-spacing: 1px;
+    letter-spacing: 2px;
+    font-size: 0.9em;
 }
 
-.terminal-col {
-    display: flex;
-    flex-direction: column;
-    /* Dicker Rahmen rechts zur Trennung */
-    border-right: var(--border-thick);
-    height: 100%;
-    position: relative;
-    overflow: hidden;
-    background-color: var(--bg-color);
-}
-
+/* --- MAIN LAYOUT (3 Spalten) --- */
 .main-grid {
     flex-grow: 1;
     display: grid;
-    /* NEU: 3 Spalten! 250px Sidebar | Rest Terminal | 30% Info */
-    grid-template-columns: 250px 1fr 30% ;
+    /* Deine Original-Aufteilung: 250px Sidebar | Terminal | 30% Info */
+    grid-template-columns: 260px 1fr 300px; /* Rechts fest 300px sieht meist besser aus als 30% */
     height: 100%;
     overflow: hidden;
 }
 
-/* --- SIDEBAR STYLING --- */
+/* --- LINKE SPALTE (SIDEBAR) --- */
 .sidebar-col {
     display: flex;
     flex-direction: column;
     border-right: var(--border-thick);
-    background-color: var(--bg-color);
+    background-color: var(--panel-bg);
     overflow: hidden;
 }
 
 #chat-list {
     flex: 1;
     overflow-y: auto;
-    padding: 10px;
+    padding: 10px 0;
 }
 
-/* Ein Chat-Item in der Liste */
 .chat-item {
-    padding: 10px;
-    margin-bottom: 5px;
-    border: 1px solid #333;
+    padding: 10px 20px;
     cursor: pointer;
-    color: #888;
+    color: var(--text-muted);
     display: flex;
     justify-content: space-between;
+    align-items: center;
+    border-left: 3px solid transparent; /* Markierung links */
+    transition: all 0.2s;
 }
 
 .chat-item:hover {
-    border-color: #fff;
-    color: #fff;
+    background-color: rgba(255, 255, 255, 0.03);
+    color: var(--text-main);
 }
 
-/* Der aktive Chat (Hell erleuchtet) */
 .chat-item.active {
-    background: #0f0;
-    color: #000;
-    border-color: #0f0;
+    background-color: var(--accent-dim);
+    color: var(--accent-color);
+    border-left: 3px solid var(--accent-color);
     font-weight: bold;
 }
 
-/* Ungelesene Nachrichten Marker */
 .unread-badge {
-    background: #f00;
-    color: #fff;
-    padding: 0 5px;
-    font-size: 0.8em;
-    display: none; /* Versteckt wenn 0 */
+    background: var(--accent-color);
+    color: #000;
+    padding: 2px 6px;
+    font-size: 0.75em;
+    border-radius: 4px;
+    font-weight: bold;
+    display: none;
 }
-.unread-badge.visible { display: block; }
+.unread-badge.visible { display: inline-block; }
 
+/* Voice Panel unten links */
+.voice-panel {
+    border-top: var(--border-thick);
+    padding: 20px;
+    background-color: rgba(0,0,0,0.2);
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+#voice-status {
+    font-size: 0.9em;
+    color: var(--text-muted);
+    margin-bottom: 10px;
+}
+#voice-status.active { color: var(--accent-color); text-shadow: 0 0 8px var(--accent-dim); }
+#voice-status.alert { color: #ff4444; animation: blink 1s infinite; }
+
+.voice-visualizer {
+    display: flex;
+    align-items: flex-end;
+    height: 30px;
+    gap: 2px;
+    margin-bottom: 10px;
+    opacity: 0.3;
+    width: 100%;
+}
+.voice-visualizer.active { opacity: 1; }
+
+.bar {
+    flex: 1;
+    background: var(--accent-color);
+    height: 3px;
+    transition: height 0.1s ease;
+    border-radius: 1px;
+}
+
+/* --- MITTLERE SPALTE (TERMINAL) --- */
+.terminal-col {
+    display: flex;
+    flex-direction: column;
+    border-right: var(--border-thick);
+    height: 100%;
+    position: relative;
+    overflow: hidden;
+    background-color: var(--bg-color);
+}
 
 #output {
     flex: 1;
     overflow-y: auto;
-    padding: 20px;
-    padding-bottom: 0;
-    min-height: 0;
+    padding: 25px;
+    padding-bottom: 10px;
+    font-size: 1.05em;
+    line-height: 1.6;
 }
 
-/* INPUT BEREICH */
+.line { margin-bottom: 6px; word-wrap: break-word; }
+.system-msg { color: var(--text-muted); }
+.error-msg { color: #ff5555; }
+.my-msg { color: #fff; } /* Eigene Nachricht: Weiß */
+.partner-msg { color: #ccc; } /* Partner: Hellgrau */
+.dynamic-name { font-weight: bold; color: var(--accent-color); cursor: pointer; }
+
+/* --- INPUT BEREICH (Gemini Style) --- */
 .input-area {
     display: flex;
-    align-items: center;
-    background: var(--bg-color);
-    padding: 15px 20px;
+    align-items: flex-end; /* Prompt bleibt unten bündig, wenn Box wächst */
+    background: var(--panel-bg);
+    padding: 15px 25px;
     border-top: var(--border-thick);
     flex-shrink: 0;
     position: relative;
-    /* WICHTIG: Hier KEINE Animation! */
+    min-height: 60px; /* Mindesthöhe für bessere Klickbarkeit */
 }
 
 .input-wrapper {
     position: relative;
     flex-grow: 1;
-    height: 1.2em;
-    overflow: hidden;
-    white-space: nowrap;
-    display: flex;
-    align-items: center;
+    display: grid; /* Grid, damit wir Elemente übereinander stapeln können */
 }
 
-/* Der echte Input (Unsichtbar aber funktional) */
-#command-input {
-    position: absolute;
-    top: 0;
-    left: 0;
+#prompt {
+    color: var(--accent-color);
+    margin-right: 12px;
+    font-weight: bold;
+    user-select: none;
+    padding-bottom: 4px; /* Optische Ausrichtung zur ersten Textzeile */
+}
+
+#command-input, #cmd-mirror {
+    /* Grid Area 1/1 bedeutet: Beide liegen in derselben Zelle übereinander */
+    grid-area: 1 / 1;
+
     width: 100%;
-    height: 100%;
-    opacity: 0; /* Unsichtbar */
-    border: none;
-    background: transparent;
-    color: transparent;
-    caret-color: transparent; /* Keinen Standard-Cursor anzeigen */
-    z-index: 2; /* Liegt OBERHALB vom Spiegel */
-    cursor: text;
-    font-family: 'Courier New', Courier, monospace; /* MUSS gleich sein */
-    font-size: 1em;
+    font-family: inherit;
+    font-size: 1.1em;
+    line-height: 1.5;
     padding: 0;
     margin: 0;
+    border: none;
+    background: transparent;
+
+    /* Wichtig für Umbrüche */
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    overflow-wrap: break-word;
+
+    max-height: 200px; /* Ab hier scrollen */
 }
 
 #command-input {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    opacity: 0;
-    border: none;
-    background: transparent;
-    color: transparent;
-    caret-color: transparent;
     z-index: 2;
-    cursor: text;
-    font-family: 'Courier New', Courier, monospace;
-    font-size: 1em;
-    padding: 0;
-    margin: 0;
+    color: transparent; /* Text unsichtbar machen */
+    caret-color: transparent; /* Standard-Strich verstecken */
+    outline: none;
+    resize: none;
+    overflow-y: auto; /* Scrollen erlauben */
 }
 
-/* Der Spiegel (Das was man sieht) */
+/* Scrollbar für das Input-Feld, wenn es zu groß wird */
+#command-input::-webkit-scrollbar { width: 4px; }
+#command-input::-webkit-scrollbar-thumb { background: var(--accent-color); border-radius: 2px; }
+
+
+#command-input::-webkit-scrollbar-thumb {
+    background: var(--accent-color);
+    border-radius: 2px;
+}
+
 #cmd-mirror {
-    /* Position Absolute entfernt, damit er den Container aufspannt beim Scrollen */
-    position: relative;
     z-index: 1;
-    pointer-events: none;
-    white-space: pre;
-    display: flex;
-    height: 100%;
-    align-items: center;
+    color: var(--text-main);
+    pointer-events: none; /* Klicks gehen durch zum Input */
+    overflow: hidden; /* Scrollbar verstecken, wird durch Input gesteuert */
+    padding-bottom: 2px; /* Fix für abgeschnittene Cursor unten */
 }
 
-#mirror-text {
-    color: #0f0;
-}
+#command-input:focus::selection { background: rgba(74, 246, 38, 0.3); color: transparent; }
 
-/* DER BLOCK CURSOR (█) */
+/* Cursor Block */
 #cursor-block {
     display: inline-block;
     min-width: 0.6em;
-    white-space: pre;
-
-    /* Standard: Unsichtbar (Outline style wenn nicht fokussiert) */
-    background-color: transparent;
-    color: transparent;
-    border: 1px solid #333; /* Leerer Kasten wenn inaktiv */
+    height: 1.2em;
+    border: 1px solid #555; /* Inaktiv: Leerer Kasten */
+    background: transparent;
 }
 
-/* Wenn du lieber nur einen fetten Strich willst statt Block: */
-/*
-#cursor-block {
-    background-color: transparent;
-    border-left: 3px solid #0f0;
-    margin-left: -1px;
-}
-*/
-
-/* NUR WENN FOKUSSIERT: Fetter Block & Blinken */
 .input-wrapper.focused #cursor-block {
+    background-color: var(--accent-color);
     border: none;
-    background-color: #0f0;
-    color: #000;
     animation: blink 1s step-end infinite;
 }
 
-@keyframes blink {
-    0%, 100% {
-        background-color: #0f0;
-        color: #000;
-    }
-    50% {
-        background-color: transparent;
-        color: #0f0;
-    }
+.hacker-selection {
+    background-color: rgba(74, 246, 38, 0.3);
+    color: #fff;
 }
 
 /* --- RECHTE SPALTE (PANELS) --- */
 .side-col {
     display: grid;
-    grid-template-rows: 1fr 1fr; /* 50/50 Teilung oben/unten */
+    grid-template-rows: 1fr 1fr; /* 50/50 Teilung */
     height: 100%;
     overflow: hidden;
-    background-color: var(--bg-color);
-}
-
-.side-col .panel-window:last-child {
-    border-bottom: none;
+    background-color: var(--panel-bg);
 }
 
 .panel-window {
-    padding: 0; /* Padding wegnehmen, damit der Header ganz am Rand klebt */
     display: flex;
     flex-direction: column;
-    background: var(--bg-color);
-
-    /* SCROLL LOGIK */
-    overflow-y: auto; /* Scrollbalken wenn nötig */
-    min-height: 0;    /* WICHTIG: Erlaubt dem Element kleiner zu sein als sein Inhalt */
-    height: 100%;     /* Füllt die Grid-Zelle komplett aus */
-    position: relative;
+    overflow: hidden;
+    border-bottom: var(--border-thick);
 }
-
-/* Trennlinie zwischen Oben und Unten */
-#promo-window {
-    border-bottom: 2px solid #333;
-}
+.panel-window:last-child { border-bottom: none; }
 
 .panel-header {
-    background: var(--bg-color);
-    color: var(--header-text-color);
     padding: 10px 15px;
-    /* Dicker Rahmen unten, um Header vom Inhalt zu trennen */
     border-bottom: var(--border-thick);
-    font-weight: bold;
+    color: var(--text-muted);
+    font-size: 0.8em;
     text-transform: uppercase;
-    position: sticky;
-    top: 0;
-    z-index: 10;
+    letter-spacing: 1px;
+    background: var(--bg-color);
 }
 
-.panel-content, #promo-list, #voice-panel {
+.panel-content, #promo-list {
     padding: 15px;
     overflow-y: auto;
     flex: 1;
-    /* Sicherstellen, dass Textfarben hier korrekt sind */
-    color: var(--text-color);
 }
 
-/* --- PROMO CARD STYLE --- */
+/* Promo Cards Modern */
 .promo-card {
-    border: 1px solid #333;
-    padding: 10px;
+    border: 1px solid var(--border-color);
+    padding: 12px;
     margin-bottom: 10px;
-    background: #050505;
-    transition: border 0.2s;
+    background: rgba(255,255,255,0.02);
+    transition: all 0.2s;
+    cursor: pointer;
 }
 .promo-card:hover {
-    border-color: #0f0;
+    border-color: var(--accent-color);
+    background: rgba(74, 246, 38, 0.05);
 }
-.promo-title {
-    font-weight: bold;
-    color: #fff;
-}
-.promo-meta {
-    font-size: 0.8em;
-    color: #888;
-    margin-bottom: 5px;
-}
-.promo-desc {
-    color: #0f0;
-    font-size: 0.9em;
-    margin: 5px 0;
-    font-style: italic;
-}
-.join-btn {
-    display: inline-block;
-    color: #000;
-    background: #0f0;
-    padding: 2px 6px;
-    font-weight: bold;
-    cursor: pointer;
-    font-size: 0.8em;
-    margin-top: 5px;
-}
-.join-btn:hover {
-    background: #fff;
-}
-
-/* --- MOBILE RESPONSIVE --- */
-@media (max-width: 900px) {
-    .main-grid {
-        grid-template-columns: 1fr; /* Alles untereinander */
-        grid-template-rows: 60% 40%; /* Chat oben, Panels unten */
-    }
-    .side-col {
-        display: none; /* Auf Handy blenden wir die Seite erstmal aus oder machen sie togglebar */
-    }
-    /* Man könnte hier einen Button bauen, der die Side-Col einblendet */
-}
-
-/* Scrollbar verstecken für mehr Realismus */
-#output::-webkit-scrollbar {
-    display: none;
-}
-
-.line {
-    margin-bottom: 5px;
-}
-
-.system-msg { color: #ffff00; }
-.error-msg { color: #ff3333; }
-.my-msg { color: #24ff00; }
-.partner-msg { color: #f5f5f5; }
-
-.input-area {
-    display: flex;
-    border-top: 1px solid #f5f5f5;
-    padding-top: 10px;
-}
-
-.prompt {
-    color: #0f0;
-    margin-right: 10px;
-    font-weight: bold;
-    white-space: nowrap;
-    /* WICHTIG: Prompt darf nicht blinken! */
-    animation: none !important;
-    opacity: 1 !important;
-}
-
-input {
-    background: transparent;
-    border: none;
-    color: #f5f5f5;
-    font-family: 'VT323', monospace;
-    font-size: 16px;
-    flex-grow: 1;
-    outline: none;
-    text-shadow: 0 0 5px #f5f5f5;
-}
-
-/* --- MOBILE LAYOUT (Keyboard-Safe) --- */
-@media (max-width: 768px) {
-    html, body {
-        /* Wir setzen die Höhe gleich per JS, daher hier nur Basics */
-        width: 100%;
-        margin: 0;
-        padding: 0;
-        overflow: hidden; /* Kein Scrollen am Body */
-
-        /* WICHTIG: Damit iOS nicht "bounct" */
-        position: fixed;
-        top: 0;
-        left: 0;
-        right: 0;
-        bottom: 0;
-    }
-
-    .terminal {
-        display: flex;
-        flex-direction: column;
-        height: 100%; /* Füllt den Body komplett aus */
-        width: 100%;
-    }
-
-    #output {
-        flex: 1; /* Nimmt den Platz, der übrig ist */
-        overflow-y: auto;
-        padding: 15px;
-        -webkit-overflow-scrolling: touch;
-    }
-
-    .input-area {
-        flex-shrink: 0; /* Darf nicht gequetscht werden */
-        background-color: #050505;
-        border-top: 1px solid #333;
-        padding: 15px;
-        /* Wir brauchen hier kein Env-Padding mehr, das macht JS */
-        z-index: 999;
-    }
-}
-
-/* --- INFO BUTTON (Oben Rechts) --- */
-.info-btn {
-    position: fixed;
-    top: 20px;
-    right: 20px;
-
-    color: #ff9d00; /* System Orange */
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: bold;
-    text-decoration: none;
-    font-size: 14px;
-
-    background: rgba(0, 0, 0, 0.8); /* Damit Text darunter nicht stört */
-    padding: 5px 10px;
-    border: 1px solid #ff9d00;
-
-    z-index: 2000; /* Muss über ALLEM liegen (auch über CRT Overlay) */
-    cursor: pointer;
-    transition: all 0.2s ease;
-}
-
-.info-btn:hover {
-    background: #ff9d00;
-    color: #000;
-    box-shadow: 0 0 10px #ff9d00;
-}
-
-/* Mobile Anpassung: Etwas kleiner und näher am Rand */
-@media (max-width: 768px) {
-    .info-btn {
-        top: 10px;
-        right: 10px;
-        font-size: 12px;
-        padding: 4px 8px;
-    }
-}
-
-/* --- WHISPER / PRIVATE MESSAGES --- */
-.whisper-msg {
-    color: #bd00ff; /* Neon-Lila */
-    font-style: italic;
-    text-shadow: 0 0 5px rgba(189, 0, 255, 0.4);
-}
-
-.whisper-sent {
-    color: #8844aa; /* Etwas dunkleres Lila für eigene gesendete */
-    font-style: italic;
-}
-
-
-/* --- CUSTOM SCROLLBAR (Webkit / Chrome / Edge) --- */
-::-webkit-scrollbar {
-    width: 10px;
-}
-
-::-webkit-scrollbar-track {
-    background: #000;
-    border-left: 1px solid #333;
-}
-
-::-webkit-scrollbar-thumb {
-    background: #0f0;
-    border: 1px solid #000;
-}
-
-::-webkit-scrollbar-thumb:hover {
-    background: #fff; /* Leuchtet weiß beim Drüberfahren */
-}
-
-/* --- SELECTION STYLING --- */
-
-/* Native Markierung komplett verstecken (damit nichts doppelt leuchtet) */
-#command-input::selection {
-    background: transparent;
-    color: transparent;
-}
-
-/* Unsere Custom-Markierung (Grüner Hintergrund, Schwarzer Text) */
-.hacker-selection {
-    background-color: #0f0;
-    color: #000;
-}
-
-/* Wenn Text markiert ist, wollen wir den blinkenden Cursor oft verstecken */
-.input-wrapper.has-selection #cursor-block {
-    display: none;
-}
-
-
-#drop-overlay {
-    position: absolute;
-    top: 0;
-    left: 0;
-    width: 100%;
-    height: 100%;
-    /* Halb-transparenter Matrix-Hintergrund */
-    background: rgba(0, 20, 0, 0.85);
-    z-index: 100; /* Muss über dem Text liegen */
-
-    /* Standardmäßig unsichtbar */
-    display: none;
-    /* opacity: 0; <-- Alternative für weicheren Übergang mit transition */
-
-    /* Flexbox zum Zentrieren des Textes */
-    justify-content: center;
-    align-items: center;
-
-    /* WICHTIG: Damit das "drop" Event durch das Overlay hindurch zum Container kommt */
-    pointer-events: none;
-}
-
-/* Wenn die Klasse 'active' hinzugefügt wird, zeigen wir es an */
-#drop-overlay.active {
-    display: flex;
-    /* opacity: 1; */
-}
-
-/* Die Text-Box in der Mitte */
-.drop-box {
-    border: 3px dashed #0f0;
-    padding: 30px;
-    text-align: center;
-    font-weight: bold;
-    font-size: 1.2em;
-    background: rgba(0, 0, 0, 0.5);
-    color: #0f0;
-    text-shadow: 0 0 10px #0f0;
-}
-
-/* --- VOICE COMMS MODULE --- */
-
-#voice-panel {
-    display: flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    height: 100%;
-    padding: 10px;
-}
-
-#voice-status {
-    font-size: 1.2em;
-    margin-bottom: 15px;
-    text-align: center;
-    color: #444; /* Grau wenn inaktiv */
-}
-
-/* Wenn aktiv oder klingelt */
-#voice-status.active { color: #0f0; text-shadow: 0 0 5px #0f0; }
-#voice-status.alert { color: #f00; animation: blink 0.5s infinite; }
-
-/* Visualizer Bars */
-.voice-visualizer {
-    display: flex;
-    align-items: flex-end; /* Balken wachsen von unten */
-    height: 60px;
-    gap: 3px;
-    margin-bottom: 20px;
-    opacity: 0.2;
-}
-
-.voice-visualizer.active { opacity: 1; }
-
-.bar {
-    width: 8px;
-    background: #0f0;
-    height: 3px; /* Start-Höhe (fast null) */
-
-    /* WICHTIG: Weiche Bewegung statt Ruckeln */
-    transition: height 0.05s ease;
-
-    /* KEINE ANIMATION MEHR HIER! */
-}
-
-/* Fake Animation (wird später vielleicht durch echte Daten ersetzt) */
-.voice-visualizer.active .bar {
-    animation: equalizer 0.8s infinite ease-in-out;
-}
+.promo-title { font-weight: bold; color: var(--text-main); font-size: 1.1em; }
+.promo-meta { font-size: 0.85em; color: var(--text-muted); margin-top: 4px; }
+.promo-desc { color: var(--accent-color); font-size: 0.9em; margin: 8px 0; font-style: italic; opacity: 0.8; }
 
 /* Buttons */
 .voice-btn {
     background: transparent;
-    border: 1px solid #0f0;
-    color: #0f0;
-    padding: 5px 15px;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 6px 12px;
     cursor: pointer;
-    font-family: inherit;
-    font-size: 1em;
-    margin: 0 5px;
+    font-family: inherit; font-size: 0.9em;
+    margin: 5px;
+    border-radius: 4px; /* Leicht abgerundet modern */
+    transition: all 0.2s;
+}
+.voice-btn:hover { border-color: var(--accent-color); color: var(--accent-color); }
+.voice-btn.danger:hover { border-color: #ff4444; color: #ff4444; }
+
+/* --- SCROLLBARS (Modern) --- */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-color); }
+::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #666; }
+
+/* --- ANIMATIONEN --- */
+@keyframes blink { 0%, 100% { opacity: 1; } 50% { opacity: 0; } }
+
+/* --- DRAG & DROP OVERLAY --- */
+#drop-overlay {
+    position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.85); z-index: 100;
+    display: none; justify-content: center; align-items: center;
+    pointer-events: none;
+}
+#drop-overlay.active { display: flex; }
+.drop-box {
+    border: 2px dashed var(--accent-color);
+    padding: 40px; color: var(--accent-color);
+    font-size: 1.5em; background: rgba(0,0,0,0.8);
 }
 
-.voice-btn:hover { background: #0f0; color: #000; }
-.voice-btn.danger { border-color: #f00; color: #f00; }
-.voice-btn.danger:hover { background: #f00; color: #000; }
+/* --- MOBILE --- */
+@media (max-width: 900px) {
+    .main-grid {
+        grid-template-columns: 1fr; /* Alles untereinander */
+        grid-template-rows: 60% 40%;
+    }
+    .sidebar-col, .side-col { display: none; } /* Mobile Logik später */
+}
