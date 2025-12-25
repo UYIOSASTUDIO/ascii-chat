@@ -2713,10 +2713,26 @@ function urlBase64ToUint8Array(base64String) {
 }
 
 async function registerSw(key) {
-    if('serviceWorker' in navigator) {
-        const reg = await navigator.serviceWorker.register('/sw.js');
-        const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
-        socket.emit('save_subscription', sub);
+    if ('serviceWorker' in navigator) {
+        try {
+            // 1. Registrierung anstoßen
+            await navigator.serviceWorker.register('/sw.js');
+
+            // 2. WICHTIG: Warten, bis der Worker wirklich "Active" ist (Safari Fix)
+            const reg = await navigator.serviceWorker.ready;
+
+            // 3. Jetzt erst abonnieren (wo wir sicher sind, dass er aktiv ist)
+            const sub = await reg.pushManager.subscribe({
+                userVisibleOnly: true,
+                applicationServerKey: urlBase64ToUint8Array(key)
+            });
+
+            socket.emit('save_subscription', sub);
+            console.log("[Client] Push Service ready.");
+
+        } catch (err) {
+            console.error("[Client] Service Worker Error:", err);
+        }
     }
 }
 

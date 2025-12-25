@@ -11,8 +11,6 @@ const crypto = require('crypto');
 const webpush = require('web-push');
 const fs = require('fs'); // <--- WICHTIG für das Speichern der Blog-Posts
 const escapeHtml = require('escape-html');
-const helmet = require('helmet');
-const rateLimit = require('express-rate-limit');
 
 
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
@@ -89,34 +87,20 @@ function serverError(msg) {
     console.error(`[ERROR ${time}] ⚠️ ${msg}`);
 }
 
-// --- SECURITY: HELMET (HTTP HEADERS) ---
-app.use(helmet({
-    contentSecurityPolicy: {
-        directives: {
-            defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline für deine JS-Logik nötig
-            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
-            fontSrc: ["'self'", "https://fonts.gstatic.com"],
-            imgSrc: ["'self'", "data:", "https://cdn-icons-png.flaticon.com"],
-            connectSrc: ["'self'", "ws:", "wss:"], // Wichtig für Socket.IO
-            upgradeInsecureRequests: [], // Deaktivieren, falls du lokal ohne HTTPS testest
-        },
-    },
-    crossOriginEmbedderPolicy: false, // Deaktivieren, damit Bilder laden
-}));
-
-// --- SECURITY: RATE LIMITING (DDoS Schutz) ---
-// Erlaubt maximal 100 Anfragen pro 15 Minuten pro IP
-const limiter = rateLimit({
-    windowMs: 15 * 60 * 1000, // 15 Minuten
-    max: 100, // Limit pro IP
-    standardHeaders: true,
-    legacyHeaders: false,
-    message: "SYSTEM ALERT: Traffic limit exceeded. Connection throttled."
+// SECURITY HEADERS (Content Security Policy)
+// Wir erlauben hier explizit Google Fonts und Flaticon Images
+app.use((req, res, next) => {
+    res.setHeader(
+        "Content-Security-Policy",
+        "default-src 'self'; " +
+        "script-src 'self' 'unsafe-inline'; " +
+        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " + // Erlaubt Fonts CSS
+        "font-src 'self' https://fonts.gstatic.com; " + // Erlaubt die Font-Dateien
+        "img-src 'self' data: https://cdn-icons-png.flaticon.com; " + // Erlaubt das Push-Icon
+        "connect-src 'self' ws: wss:;"
+    );
+    next();
 });
-
-// Wende das Limit auf alle HTTP-Routen an (Uploads, HTML, etc.)
-app.use(limiter);
 
 const server = http.createServer(app);
 const io = new Server(server);
@@ -210,31 +194,8 @@ io.on('connection', (socket) => {
     // ANONYM: Wir loggen nicht die ID, nur dass eine Verbindung besteht
     serverLog(`Neue Verbindung (Socket) hergestellt.`);
 
-    // --- SOCKET SPAM PROTECTION MIDDLEWARE ---
-    // Wir nutzen ein einfaches Token-Bucket System pro Socket
-    socket.packetCount = 0;
-    const SPAM_THRESHOLD = 20; // Max 20 Events pro Sekunde
-    const spamReset = setInterval(() => {
-        socket.packetCount = 0;
-    }, 1000);
-
-    // Middleware für JEDES eingehende Paket
-    socket.use((packet, next) => {
-        socket.packetCount++;
-        if (socket.packetCount > SPAM_THRESHOLD) {
-            // Zu schnell!
-            if (socket.packetCount === SPAM_THRESHOLD + 1) {
-                socket.emit('system_message', 'WARNING: Uplink unstable. Slow down.');
-                serverLog(`Spam detected from ${socket.username || socket.id}`);
-            }
-            // Wir ignorieren das Paket, rufen next() NICHT auf
-            return;
-        }
-        next();
-    });
-
     // --- FILE SYSTEM AUTHENTIFIZIERUNG ---
-    // --- LOGIN HANDLER (FILE SYSTEM) ---
+// --- LOGIN HANDLER (FILE SYSTEM) ---
     socket.on('fs_login', (data) => {
         socket.username = escapeHtml(data.username || 'Anonymous'); // XSS Schutz auch hier
         // Wir nehmen den User aus der Haupt-Liste, falls er eingeloggt ist
@@ -2699,7 +2660,6 @@ io.on('connection', (socket) => {
 
     // --- DISCONNECT HANDLING ---
     socket.on('disconnect', () => {
-        clearInterval(spamReset);
         // 1. User identifizieren
         const user = users[socket.id];
 
@@ -3178,6 +3138,11 @@ io.on('connection', (socket) => {
 
 });
 
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 SYSTEM ONLINE: Server running on port ${PORT}`);
+});
+
 // --- HELPER: PUBLIC ROOMS NEU ORGANISIEREN ---
 function reorganizePublicRooms() {
     // 1. MÜLLABFUHR: Nur Räume mit Mitgliedern behalten
@@ -3244,28 +3209,3 @@ function generatePromoList() {
             date: g.promotedAt
         }));
 }
-
-// --- SAFETY NET: GLOBAL ERROR HANDLING ---
-
-// Fängt Fehler im Express-Teil ab (z.B. Upload Fehler)
-app.use((err, req, res, next) => {
-    console.error("[EXPRESS ERROR]", err.stack);
-    res.status(500).send('INTERNAL SYSTEM ERROR');
-});
-
-// Fängt Fehler ab, die den ganzen Prozess töten würden (z.B. Syntax-Fehler im laufenden Betrieb)
-process.on('uncaughtException', (err) => {
-    serverError(`CRITICAL PROCESS ERROR: ${err.message}`);
-    console.error(err.stack);
-    // WICHTIG: Im echten Betrieb würde man hier neustarten,
-    // aber wir halten den Prozess am Leben, damit der Chat nicht stirbt.
-});
-
-process.on('unhandledRejection', (reason, promise) => {
-    serverError(`UNHANDLED PROMISE REJECTION: ${reason}`);
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 SYSTEM ONLINE: Server running on port ${PORT}`);
-});
