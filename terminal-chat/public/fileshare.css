@@ -1,112 +1,241 @@
-/* --- GLOBAL STYLE (Hacker Theme) --- */
-html, body {
-    height: 100%;
-    margin: 0;
-    overflow: hidden; /* Verhindert Scrollen der ganzen Seite */
+/* --- DATEI-SYSTEM THEME (Sync mit style.css) --- */
+@import url('https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500;700&display=swap');
+
+:root {
+    /* Exakte Kopie deiner Variablen aus style.css */
+    --bg-color: #1a1a1a;
+    --panel-bg: #222222;
+    --text-main: #e0e0e0;
+    --text-muted: #888888;
+    --accent-color: #4af626;
+    --accent-dim: rgba(74, 246, 38, 0.15);
+
+    --border-color: rgba(255, 255, 255, 0.12);
+    --border-thick: 1px solid var(--border-color);
+
+    --font-stack: 'Fira Code', 'Courier New', monospace;
 }
 
-body {
-    background-color: #000;
-    color: #0f0;
-    font-family: 'Courier New', Courier, monospace;
+* {
+    box-sizing: border-box;
     margin: 0;
-    height: 100vh;
+    padding: 0;
+    scrollbar-width: thin;
+    scrollbar-color: #444 var(--bg-color);
+}
+
+html, body {
+    height: 100%;
+    width: 100%;
+    background-color: var(--bg-color);
+    color: var(--text-main);
+    font-family: var(--font-stack);
+    font-size: 14px;
     display: flex;
     flex-direction: column;
     overflow: hidden;
 }
 
-/* HEADER */
+/* --- HEADER (Identisch mit .top-header) --- */
 header {
-    border-bottom: 2px solid #0f0;
-    padding: 10px 20px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    background: #111;
-    height: 50px;
+    padding: 12px 20px;
+    background-color: var(--bg-color);
+    color: var(--text-muted);
+    font-weight: 500;
+    border-bottom: var(--border-thick);
+    flex-shrink: 0;
+    text-transform: uppercase;
+    letter-spacing: 2px;
+    font-size: 0.9em;
+    z-index: 1000;
 }
 
-.header-title { font-weight: bold; font-size: 1.2em; text-shadow: 0 0 5px #0f0; }
-.back-btn {
-    background: #000; color: #0f0; border: 1px solid #0f0;
-    padding: 5px 15px; cursor: pointer; font-family: inherit;
-    font-weight: bold;
+.header-title {
+    color: var(--text-muted); /* Wie im Chat Header */
+    font-weight: 500;
 }
-.back-btn:hover { background: #0f0; color: #000; }
 
+/* Buttons (Identisch mit .voice-btn) */
+button, .back-btn, .btn-action, .btn-mount, .btn-close {
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
+    padding: 6px 12px;
+    cursor: pointer;
+    font-family: inherit;
+    font-size: 0.9em;
+    border-radius: 4px; /* Modern abgerundet */
+    transition: all 0.2s;
+    text-transform: uppercase;
+}
+
+button:hover, .back-btn:hover, .btn-action:hover, .btn-mount:hover, .btn-close:hover {
+    border-color: var(--accent-color);
+    color: var(--accent-color);
+    background: transparent; /* Kein Hintergrund-Wechsel im modernen Theme */
+}
+
+/* Spezieller "Danger" Style für Unmount/Cancel */
+.btn-danger {
+    color: #ff5555;
+    border-color: rgba(255, 85, 85, 0.3);
+}
+.btn-danger:hover {
+    color: #ff5555;
+    border-color: #ff5555;
+    background: rgba(255, 85, 85, 0.05);
+}
+
+/* --- LAYOUT --- */
 .main-container {
     display: flex;
-    height: calc(100vh - 60px); /* Höhe minus Header (ca 60px) */
+    height: calc(100vh - 50px); /* Header abziehen */
     overflow: hidden;
 }
 
-/* SIDEBAR (30%) */
+/* SIDEBAR (Identisch mit .sidebar-col) */
 .sidebar {
-    width: 30%;
+    width: 300px;
     min-width: 250px;
-    border-right: 2px solid #0f0;
+    border-right: var(--border-thick);
     display: flex;
     flex-direction: column;
-    background: #050505;
+    background-color: var(--panel-bg);
+    position: relative;
+    z-index: 10;
 }
 
 .sidebar-header {
-    padding: 10px;
-    background: #0f0;
-    color: #000;
-    font-weight: bold;
+    padding: 15px 15px 5px 15px;
+    font-size: 0.7em;
+    color: #666;
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    background: transparent; /* Kein grüner Balken mehr */
+    text-align: left;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    margin-bottom: 5px;
+}
+
+/* MOUNT CONTROLS (Oben in der Sidebar) */
+.mount-controls {
+    padding: 15px;
+    border-bottom: var(--border-thick);
+    background: var(--bg-color); /* Etwas dunkler als Sidebar */
     text-align: center;
 }
 
+.btn-mount {
+    width: 100%;
+    margin-bottom: 5px;
+    border-style: dashed;
+}
+
+/* LISTE DER DRIVES (Identisch mit .chat-item) */
 .share-list {
     list-style: none;
-    padding: 0;
+    padding: 10px 0;
     margin: 0;
     overflow-y: auto;
+    flex: 1;
 }
 
 .share-item {
-    padding: 15px;
-    border-bottom: 1px solid #333;
+    padding: 12px 20px; /* Etwas mehr Platz für zwei Zeilen */
     cursor: pointer;
-    transition: background 0.2s;
+    color: var(--text-muted);
+
+    /* --- LAYOUT FIX: Untereinander statt nebeneinander --- */
+    display: flex;
+    flex-direction: column; /* Stapelt Name und User übereinander */
+    align-items: flex-start; /* Alles linksbündig */
+    justify-content: center;
+    gap: 4px; /* Kleiner Abstand zwischen Name und User */
+    /* ----------------------------------------------------- */
+
+    border-left: 3px solid transparent;
+    transition: all 0.2s;
+    border-bottom: 1px solid rgba(255,255,255,0.03); /* Feine Trennlinie hilft bei Listen */
 }
-.share-item:hover { background: #111; border-left: 4px solid #0f0; }
-.share-item.active { background: #222; border-left: 4px solid #0f0; color: #fff; }
 
-.share-name { font-weight: bold; display: block; }
-.share-user { font-size: 0.8em; color: #888; display: block; margin-top: 4px; }
+.share-item:hover {
+    background-color: rgba(255, 255, 255, 0.03);
+    border-left-color: rgba(255, 255, 255, 0.2); /* Dezent beim Hover */
+}
 
-/* CONTENT AREA (70%) */
+.share-item.active {
+    background-color: var(--accent-dim);
+    color: var(--accent-color);
+    border-left: 3px solid var(--accent-color);
+}
+
+.share-item.active .share-name {
+    color: var(--accent-color);
+    font-weight: bold;
+}
+
+.share-name {
+    font-size: 1em;
+    font-weight: 500;
+    color: var(--text-main);
+    line-height: 1.2;
+}
+
+/* User Info etwas dezenter */
+.share-user {
+    font-size: 0.8em;
+    opacity: 0.7;
+}
+
+/* CONTENT AREA (Identisch mit .terminal-col) */
 .content-area {
     flex: 1;
     display: flex;
-    flex-direction: column; /* Stapelt Actions, Grid/Preview, Breadcrumbs */
+    flex-direction: column;
     height: 100%;
-    overflow: hidden; /* WICHTIG: Begrenzt die Höhe */
-    background-color: #000; /* Sicherstellen, dass Hintergrund schwarz ist */
+    background-color: var(--bg-color);
     position: relative;
 }
 
-/* In public/fileshare.css hinzufügen/anpassen: */
+/* SUCHLEISTE (Identisch mit .sidebar-search-wrapper) */
+#driveSearch {
+    width: 90%;
+    margin: 10px auto;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--accent-color);
+    font-family: inherit;
+    font-size: 0.9em;
+    padding: 5px 8px;
+    outline: none;
+    display: block;
+    border-radius: 4px;
+}
+#driveSearch:focus {
+    border-color: var(--accent-color);
+    background: rgba(74, 246, 38, 0.05);
+}
 
+/* FILE GRID (Modernisiert) */
 .file-grid {
-    flex: 1;           /* Nimmt den gesamten freien Platz ein */
-    overflow: auto;    /* Erlaubt scrollen, wenn viele Dateien da sind */
-    display: grid;     /* Behält das Grid-Layout bei */
-    grid-template-columns: repeat(auto-fill, minmax(100px, 1fr)); /* Responsives Grid */
-    gap: 15px;         /* Abstand zwischen Icons */
-    padding: 20px;     /* Innenabstand */
-    align-content: start; /* Icons starten oben, nicht mittig gestreckt */
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(110px, 1fr));
+    gap: 15px;
+    align-content: start;
 }
 
 .empty-state {
     grid-column: 1 / -1;
     text-align: center;
-    color: #555;
+    color: var(--text-muted);
     margin-top: 100px;
-    font-size: 1.2em;
+    font-size: 1.1em;
 }
 
 .file-icon {
@@ -115,227 +244,204 @@ header {
     align-items: center;
     text-align: center;
     cursor: pointer;
-    padding: 10px;
-    border-radius: 5px;
+    padding: 15px;
     border: 1px solid transparent;
+    border-radius: 6px;
+    transition: all 0.2s;
+    background: rgba(255,255,255,0.02); /* Wie .promo-card */
 }
+
 .file-icon:hover {
-    background: #0a0a0a;
-    border: 1px solid #333;
-    box-shadow: 0 0 15px rgba(0, 255, 0, 0.2);
+    border-color: var(--accent-color);
+    background: rgba(74, 246, 38, 0.05);
+    box-shadow: none; /* Kein Glow mehr, nur subtil */
 }
 
 .icon-img {
-    width: 48px; height: 48px; margin-bottom: 8px;
-    fill: #0f0;
+    width: 40px; height: 40px; margin-bottom: 10px;
+    fill: var(--accent-color);
+    opacity: 0.8;
 }
-.file-label { font-size: 0.8em; word-break: break-all; }
+.file-label {
+    font-size: 0.9em;
+    word-break: break-all;
+    color: var(--text-main);
+}
 
-/* PREVIEW VIEW */
+/* PREVIEW PANE */
 .preview-pane {
-    display: none;
-    flex: 1;
+    display: none;        /* Wird per JS auf flex gesetzt */
+    flex: 1;              /* Nimmt den restlichen Platz ein */
     flex-direction: column;
-    padding: 20px;
-    background: #0a0a0a;
+    background: var(--bg-color);
+
+    /* WICHTIG: Damit Flexbox nicht über den Bildschirm hinauswächst */
+    overflow: hidden;
+    min-height: 0;
 }
 
 .preview-toolbar {
+    padding: 10px 20px;
+    border-bottom: var(--border-thick);
     display: flex;
     justify-content: space-between;
-    margin-bottom: 15px;
-    padding-bottom: 10px;
-    border-bottom: 1px dotted #0f0;
+    align-items: center;
+    background: var(--panel-bg);
+    flex-shrink: 0;       /* Toolbar darf nicht schrumpfen */
 }
 
-#filePreview {
-    /* Nimmt den ganzen Platz zwischen Toolbar und Breadcrumbs */
-    flex: 1;
-    display: flex; /* Damit wir Toolbar und Content stapeln können */
-    flex-direction: column;
-    overflow: hidden; /* Der Container selbst scrollt nicht, nur der Inhalt */
-    min-height: 0; /* Wichtiger Flexbox Trick damit Scrolling geht */
-}
+.preview-filename { font-weight: bold; color: var(--text-main); }
 
-/* 4. Der eigentliche Inhalt (Hier wird gescrollt!) */
 #previewContent {
-    flex: 1; /* Nimmt restlichen Platz */
-    overflow: auto; /* Zeigt Scrollbars an, wenn Inhalt zu groß ist */
-    padding: 20px;
+    flex: 1;              /* Füllt den Platz unter der Toolbar */
+    overflow-y: auto;     /* Scrollbar NUR hier, wenn Text zu lang */
+    padding: 25px;
+    background: var(--bg-color);
+    color: var(--text-main);
+    font-family: inherit;
+    line-height: 1.6;
+    white-space: pre-wrap;
+    border: none;
+    margin: 0;
 
-    /* Damit Textumbrüche korrekt sind und Code horizontal scrollt */
-    white-space: pre-wrap; /* Text bricht um */
-    word-break: break-word; /* Lange Wörter brechen um */
-
-    /* Optik */
-    color: #0f0;
-    font-family: 'Courier New', monospace;
-    background: #0a0a0a;
-    border: 1px solid #333;
-    margin: 10px;
+    /* Scrollbar Design integration */
+    scrollbar-width: thin;
+    scrollbar-color: #444 var(--bg-color);
 }
 
-/* 5. Bilder im Preview */
 #previewContent img {
-    /* Damit Bilder scrollbar werden, wenn sie riesig sind,
-       entfernen wir max-width oder setzen es auf none,
-       falls du reinzoomen willst.
-       Standardmäßig ist aber "fit to screen" meist besser: */
     max-width: 100%;
     height: auto;
+    border: 1px solid var(--border-color);
     display: block;
     margin: 0 auto;
 }
 
-.btn-action {
-    background: transparent; border: 1px solid #0f0; color: #0f0;
-    padding: 5px 15px; cursor: pointer; font-family: inherit;
-}
-.btn-action:hover { background: #0f0; color: #000; }
-.btn-close { border-color: #f00; color: #f00; }
-.btn-close:hover { background: #f00; color: #fff; }
-
-.preview-content {
-    flex: 1;
-    border: 1px solid #333;
-    padding: 15px;
-    overflow: auto;
-    white-space: pre-wrap;
-    font-family: monospace;
-    background: #000;
-    color: #ddd;
-}
-
-/* BREADCRUMBS */
+/* BREADCRUMBS (Unten, wie Statusleiste) */
 .breadcrumb-bar {
-    height: 40px; /* Feste Höhe */
-    flex-shrink: 0; /* Darf nicht zusammengedrückt werden */
-    background: #111;
-    border-top: 1px solid #333;
+    height: 40px;
+    flex-shrink: 0;
+    background: var(--panel-bg);
+    border-top: var(--border-thick);
     display: flex;
     align-items: center;
     padding: 0 15px;
-    z-index: 10;
+    font-size: 0.9em;
+    color: var(--text-muted);
 }
-.crumb { color: #0f0; cursor: pointer; }
-.crumb:hover { text-decoration: underline; }
-.separator { margin: 0 5px; color: #555; }
-
-/* NEU: MOUNT CONTROLS */
-.mount-controls {
-    padding: 15px;
-    border-bottom: 2px solid #0f0;
-    background: #000;
-    text-align: center;
-}
-
-.btn-mount {
-    background: #000;
-    color: #0f0;
-    border: 1px dashed #0f0;
-    padding: 10px;
-    width: 100%;
-    cursor: pointer;
-    font-family: 'Courier New', Courier, monospace;
-    font-weight: bold;
-    text-transform: uppercase;
-    transition: all 0.2s;
-}
-
-.btn-mount:hover {
-    background: #0f0;
-    color: #000;
-    box-shadow: 0 0 10px #0f0;
-}
-
-.btn-danger {
-    color: #f00;
-    border-color: #f00;
-}
-.btn-danger:hover {
-    background: #f00;
-    color: #000;
-    box-shadow: 0 0 10px #f00;
-}
-
-/* Anpassung Sidebar Header (damit es passt) */
-.sidebar-header {
-    /* border-top entfernen falls vorher gesetzt */
-    border-top: none;
-}
+.crumb { color: var(--text-main); cursor: pointer; }
+.crumb:hover { color: var(--accent-color); text-decoration: none; }
+.separator { margin: 0 8px; color: #555; }
 
 
-/* MODALS */
+/* MODALS (Modern Flat Style) */
 .modal-overlay {
     position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-    background: rgba(0, 0, 0, 0.85);
+    background: rgba(0, 0, 0, 0.85); /* Etwas dunklerer Dimmer */
     display: flex; justify-content: center; align-items: center;
-    z-index: 1000;
+    z-index: 2000;
 }
 
 .modal-window {
-    background: #0a0a0a; border: 1px solid #0f0;
-    padding: 20px; width: 400px; max-width: 90%;
-    box-shadow: 0 0 20px rgba(0, 255, 0, 0.2);
+    background: var(--panel-bg);
+    border: 1px solid var(--border-color);
+    /* Kein Glow, nur dezenter Schatten */
+    box-shadow: 0 10px 30px rgba(0,0,0,0.5);
+    padding: 25px;
+    width: 450px;
+    max-width: 90%;
     display: flex; flex-direction: column; gap: 15px;
+    border-radius: 6px;
 }
 
-.modal-window h3 { margin: 0 0 10px 0; color: #0f0; border-bottom: 1px solid #333; padding-bottom: 5px; }
-.form-group { display: flex; flex-direction: column; gap: 5px; }
-.form-group label { font-size: 0.8em; color: #888; }
-.form-group input {
-    background: #000; border: 1px solid #333; color: #0f0; padding: 8px;
-    font-family: 'Courier New', monospace;
+.modal-window h3 {
+    color: var(--text-main);
+    border-bottom: 1px solid var(--border-color);
+    padding-bottom: 10px;
+    margin: 0;
+    font-weight: 500;
+    letter-spacing: 1px;
 }
-.modal-actions { display: flex; justify-content: space-between; margin-top: 10px; }
 
-/* SEARCH BAR STYLING */
-#driveSearch {
-    margin-bottom: 15px;
+.form-group label {
+    color: var(--text-muted);
+    font-size: 0.85em;
+    margin-bottom: 5px;
     display: block;
-    background: #000;
-    border: 1px solid #333;
-    color: #0f0;
-    padding: 8px;
-    font-family: 'Courier New', monospace;
-    font-size: 14px;
-    outline: none;
-    transition: all 0.3s ease;
 }
-
-#driveSearch:focus {
-    background: #0a0a0a;
-    box-shadow: 0 0 10px rgba(0, 255, 0, 0.2);
-}
-
-#driveSearch::placeholder {
-    color: #005500;
-}
-
-/* GROUP SELECTION STYLE */
-.group-select-container {
-    background: #000;
-    border: 1px solid #333;
+.form-group input {
+    width: 100%;
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    color: var(--text-main);
     padding: 10px;
-    max-height: 100px;
+    font-family: inherit;
+    border-radius: 4px;
+    box-sizing: border-box;
+}
+.form-group input:focus {
+    border-color: var(--accent-color);
+    outline: none;
+}
+
+.group-select-container {
+    background: var(--bg-color);
+    border: 1px solid var(--border-color);
+    padding: 10px;
+    max-height: 150px;
     overflow-y: auto;
     display: flex;
-    flex-wrap: wrap;
-    gap: 10px;
-}
-
-.group-checkbox {
-    display: flex;
-    align-items: center;
+    flex-direction: column;
     gap: 5px;
-    font-size: 0.9em;
-    color: #888;
-    cursor: pointer;
-    border: 1px solid #333;
-    padding: 2px 6px;
     border-radius: 4px;
 }
 
-.group-checkbox:hover { border-color: #0f0; color: #fff; }
-.group-checkbox input { margin: 0; cursor: pointer; }
-.group-checkbox input:checked + span { color: #0f0; text-shadow: 0 0 5px #0f0; }
+.group-checkbox {
+    display: flex; align-items: center; gap: 8px;
+    color: var(--text-muted); cursor: pointer;
+    padding: 5px; border-radius: 3px;
+    transition: background 0.2s;
+}
+.group-checkbox:hover { background: rgba(255,255,255,0.03); color: var(--text-main); }
+.group-checkbox input:checked + span { color: var(--accent-color); font-weight: bold; }
+
+/* Scrollbars (Modern) */
+::-webkit-scrollbar { width: 6px; }
+::-webkit-scrollbar-track { background: var(--bg-color); }
+::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: #666; }
+
+/* --- FIX: MOUNT MODAL LAYOUT --- */
+
+/* Container: Alles untereinander zwingen */
+#fileSelectionArea {
+    display: flex;
+    flex-direction: column !important; /* Erzwingt vertikale Ausrichtung */
+    gap: 10px; /* Luft zwischen Label, Button und Text */
+    margin-top: 10px;
+}
+
+/* Button: Volle Breite und besser klickbar */
+#fileSelectionArea .btn-action {
+    width: 100%;
+    text-align: center;
+    padding: 12px; /* Größere Klickfläche */
+    margin: 0;
+    background: rgba(255, 255, 255, 0.02);
+}
+
+#fileSelectionArea .btn-action:hover {
+    background: rgba(74, 246, 38, 0.1);
+}
+
+/* Info Text (Span): Zentrieren und Inline-Styles überschreiben */
+#selectedFolderName {
+    display: block; /* Macht aus dem Inline-Element einen Block */
+    width: 100%;
+    text-align: center;
+    margin-left: 0 !important; /* Entfernt den seitlichen Abstand aus dem HTML */
+    margin-top: 5px;
+    font-size: 0.85em;
+    font-style: italic;
+    color: var(--text-muted) !important; /* Korrekte Farbe erzwingen */
+}

@@ -37,12 +37,6 @@ const iceConfig = {
 };
 const jsonChunkBuffer = {};
 
-// --- LIFECYCLE ---
-const lifeCycleChannel = new BroadcastChannel('terminal_chat_lifecycle');
-lifeCycleChannel.onmessage = (event) => {
-    if (event.data.type === 'MASTER_DISCONNECT') window.close();
-};
-
 // --- AUTH CHECK ---
 const user = localStorage.getItem('fs_username');
 if(!user) {
@@ -994,19 +988,51 @@ function handleChannelMessage(msg, peerId, channel) {
     }
 }
 
-// --- HELPER FUNCTIONS ---
-function createGridItem(i){
-    const d=document.createElement('div'); d.className='file-icon';
-    d.innerHTML=`<div class="icon-img">${i.type==='folder'?'[DIR]':'[FILE]'}</div><div class="file-label">${i.name}</div>`;
-    if(i.type==='folder') d.querySelector('.icon-img').innerHTML = `<svg viewBox="0 0 24 24" style="width:48px; height:48px; fill:#0f0;"><path d="M10 4H4c-1.1 0-1.99.9-1.99 2L2 18c0 1.1.9 2 2 2h16c1.1 0 2-.9 2-2V8c0-1.1-.9-2-2-2h-8l-2-2z"/></svg>`;
-    else d.querySelector('.icon-img').innerHTML = `<svg viewBox="0 0 24 24" style="width:48px; height:48px; fill:#0f0;"><path d="M14 2H6c-1.1 0-1.99.9-1.99 2L4 20c0 1.1.89 2 1.99 2H18c1.1 0 2-.9 2-2V8l-6-6zm2 16H8v-2h8v2zm0-4H8v-2h8v2zm-3-5V3.5L18.5 9H13z"/></svg>`;
+// --- HELPER FUNCTIONS (Updated Icons) ---
+
+function createGridItem(i) {
+    const d = document.createElement('div');
+    d.className = 'file-icon';
+
+    // Icon-Container
+    let iconSvg = '';
+
+    if (i.type === 'folder') {
+        // WIN98 STYLE FOLDER (Pixel-Look)
+        // Wenn du dein eigenes SVG hast, ersetze alles zwischen den ` ` Backticks:
+        iconSvg = `<svg id="Layer_2" data-name="Layer 2" xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 35.91 35.91">
+  <g id="Layer_1-2" data-name="Layer 1">
+    <image width="48" height="48" transform="scale(.75)" xlink:href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAADAAAAAwBAMAAAClLOS0AAAABGdBTUEAALGPC/xhBQAAACBjSFJNAAB6JgAAgIQAAPoAAACA6AAAdTAAAOpgAAA6mAAAF3CculE8AAAAFVBMVEUAAACAgID//////wDAwMAAAACAgAC8xve0AAAAAXRSTlMAQObYZgAAAAFiS0dEAmYLfGQAAAAHdElNRQfiBhgXARJ+fm8FAAAAWElEQVQ4y2NgoCoQBAMBDHFGJTBQxJAQMoEAdC2Mys4Q4IhDA7oWuAZ0LSIuCCCIAECTlLCCACQrUEAqg5AzVpA6qmNUx/DTIZaGFaQysIZiBQHULUqwAwDYX84VrGtNvgAAACV0RVh0ZGF0ZTpjcmVhdGUAMjAxOC0wNi0yNFQyMzowMToxOC0wNDowMEvzV3IAAAAldEVYdGRhdGU6bW9kaWZ5ADIwMTgtMDYtMjRUMjM6MDE6MTgtMDQ6MDA6ru/OAAAAAElFTkSuQmCC"/>
+  </g>
+</svg>`;
+    } else {
+        // WIN98 STYLE FILE (Pixel-Look with Dog-Ear)
+        // Hier dein File-SVG einfügen:
+        iconSvg = `<svg viewBox="0 0 24 24" style="width:48px; height:48px; fill:currentColor;">
+            <path d="M4 2H14L20 8V22H4V2Z" fill="none" stroke="currentColor" stroke-width="2"/>
+            <polyline points="14 2 14 8 20 8" fill="none" stroke="currentColor" stroke-width="2"/>
+            <line x1="8" y1="12" x2="16" y2="12" stroke="currentColor" stroke-width="2"/>
+            <line x1="8" y1="16" x2="16" y2="16" stroke="currentColor" stroke-width="2"/>
+        </svg>`;
+    }
+
+    d.innerHTML = `<div class="icon-img">${iconSvg}</div><div class="file-label">${i.name}</div>`;
     return d;
 }
 
-function addBackButton(g,cb){
-    const d=document.createElement('div'); d.className='file-icon'; d.style.opacity='0.7';
-    d.innerHTML=`<div class="icon-img" style="font-size:30px;display:flex;justify-content:center;align-items:center;border:1px solid #0f0;border-radius:50%;"><svg viewBox="0 0 24 24" style="width:32px; height:32px; fill:#0f0;"><path d="M20 11H7.83l5.59-5.59L12 4l-8 8 8 8 1.41-1.41L7.83 13H20v-2z"/></svg></div><div class="file-label">[ GO BACK ]</div>`;
-    d.onclick=cb; g.appendChild(d);
+function addBackButton(g, cb) {
+    const d = document.createElement('div');
+    d.className = 'file-icon';
+    d.style.opacity = '0.7';
+
+    // WIN98 STYLE "UP / BACK" ARROW
+    const backSvg = `<svg viewBox="0 0 24 24" style="width:32px; height:32px; fill:currentColor;">
+        <path d="M20 11H7.8L13.4 5.4L12 4L4 12L12 20L13.4 18.6L7.8 13H20V11Z" fill="currentColor"/>
+    </svg>`;
+
+    d.innerHTML = `<div class="icon-img" style="display:flex;justify-content:center;align-items:center;border:1px solid var(--accent-color);border-radius:4px;padding:5px;">${backSvg}</div><div class="file-label">[ GO BACK ]</div>`;
+    d.onclick = cb;
+    g.appendChild(d);
 }
 
 function sendLargeJSON(c,t,p){ const j=JSON.stringify({type:t,payload:p}); const MAX=12000; for(let i=0;i<j.length;i+=MAX) c.send(JSON.stringify({type:'JSON_CHUNK',data:j.slice(i,i+MAX),isLast:i+MAX>=j.length})); }
@@ -1149,3 +1175,13 @@ window.addEventListener('storage', (event) => {
         }
     }
 });
+
+setInterval(() => {
+    // Wenn wir keinen Opener haben (z.B. Link direkt kopiert), bleiben wir offen.
+    if (!window.opener) return;
+
+    // Wenn der Opener geschlossen wurde (closed ist true), schließen wir uns auch.
+    if (window.opener.closed) {
+        window.close();
+    }
+}, 500);

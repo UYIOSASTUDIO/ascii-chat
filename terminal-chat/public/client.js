@@ -64,6 +64,8 @@ let myKeyPair = null; // Unser eigenes Schlüsselpaar
 let outgoingConnects = {};
 let currentVoiceTarget = null; // Speichert den Key des aktuellen Gesprächspartners
 
+let fileShareWindow = null;
+
 // Hilfsfunktion für den Accept-Button
 window.triggerAccept = (key) => {
     // Simuliert die Eingabe von /accept [KEY]
@@ -117,10 +119,16 @@ function openFileSystem() {
     }
     // Speichern für die neue Seite
     localStorage.setItem('fs_username', myUsername);
-    localStorage.setItem('fs_key', myKey); // Falls du den Key hast
 
-    // In neuem Tab öffnen, damit Chat offen bleibt
-    window.open('/fileshare.html', '_blank');
+    // Kleiner Sicherheitscheck, falls myKey noch undefined ist
+    if (typeof myKey !== 'undefined') {
+        localStorage.setItem('fs_key', myKey);
+    }
+
+    // WICHTIG: Das Fenster in der Variable speichern!
+    // Du kannst auch Dimensionen angeben (z.B. 'width=950,height=700'),
+    // dann öffnet es sich als schickes Popup statt als neuer Tab.
+    fileShareWindow = window.open('/fileshare.html', '_blank');
 }
 
 function getDynamicName(name, key) {
@@ -365,33 +373,101 @@ function deleteChat(chatId) {
     }
 }
 
+// HILFSFUNKTION: Generiert den exakten Anzeigenamen für einen Chat
+// (Wird für Anzeige UND Suche genutzt -> 100% Übereinstimmung)
+function getChatDisplayName(chat) {
+    if (!chat) return '';
+
+    // 1. Local Shell
+    if (chat.id === 'LOCAL') return '> LOCAL_SHELL';
+
+    // 2. Private Chats
+    if (chat.type === 'private') return `[P2P] ${chat.name}`;
+
+    // 3. Gruppen
+    if (chat.type === 'group') return `${chat.name} [${chat.id}]`;
+
+    // 4. Public Sektoren
+    if (chat.type === 'pub') return `SECTOR ${chat.name}`;
+
+    // Fallback
+    return chat.name || 'UNKNOWN';
+}
+
+// HAUPTFUNKTION: Sidebar rendern & filtern
 function renderChatList() {
-    chatList.innerHTML = '';
-    Object.values(myChats).forEach(chat => {
-        const item = document.createElement('div');
-        item.className = `chat-item ${chat.id === activeChatId ? 'active' : ''}`;
-        item.onclick = () => switchChat(chat.id);
+    const listContainer = document.getElementById('chat-list');
+    if (!listContainer) return;
 
-        let display = chat.name;
+    // 1. Suchbegriff holen
+    const searchInput = document.getElementById('chat-search-input');
+    const query = searchInput ? searchInput.value.toLowerCase().trim() : '';
 
-        // FORMATIERUNG DER SIDEBAR
-        if(chat.type === 'private') {
-            display = `[P2P] ${chat.name}`;
-        }
-        else if (chat.type === 'group') {
-            // DEIN WUNSCH: Name [ID]
-            display = `${chat.name} [${chat.id}]`;
-        }
-        else if (chat.type === 'pub') {
-            display = `SECTOR: ${chat.name}`;
-        }
+    // listContainer leeren
+    listContainer.innerHTML = '';
 
-        item.innerHTML = `
-            <span>${display}</span>
-            <span class="unread-badge ${chat.unread > 0 ? 'visible' : ''}">!${chat.unread}</span>
-        `;
-        chatList.appendChild(item);
+    // 2. FILTERN (Crash-Fix: String() um die ID!)
+    const allChats = Object.values(myChats).filter(chat => {
+        const displayName = getChatDisplayName(chat).toLowerCase();
+
+        // --- FIX: Sicherstellen, dass es ein String ist ---
+        const id = String(chat.id || '').toLowerCase();
+        // --------------------------------------------------
+
+        return displayName.includes(query) || id.includes(query);
     });
+
+    // 3. KATEGORISIEREN
+    const buckets = { local: [], private: [], group: [], pub: [] };
+
+    allChats.forEach(chat => {
+        if (chat.id === 'LOCAL') buckets.local.push(chat);
+        else if (chat.type === 'private') buckets.private.push(chat);
+        else if (chat.type === 'group') buckets.group.push(chat);
+        else if (chat.type === 'pub') buckets.pub.push(chat);
+    });
+
+    // 4. SORTIEREN
+    const sorter = (a, b) => (a.name || '').localeCompare(b.name || '');
+    buckets.private.sort(sorter);
+    buckets.group.sort(sorter);
+    buckets.pub.sort(sorter);
+
+    // 5. RENDER HELPER
+    const renderSection = (title, chats) => {
+        if (chats.length === 0) return;
+
+        if (title) {
+            const header = document.createElement('div');
+            header.className = 'chat-category-header';
+            header.innerText = title;
+            listContainer.appendChild(header);
+        }
+
+        chats.forEach(chat => {
+            const item = document.createElement('div');
+            item.className = `chat-item ${chat.id === activeChatId ? 'active' : ''}`;
+            item.onclick = () => switchChat(chat.id);
+
+            const display = getChatDisplayName(chat);
+
+            item.innerHTML = `
+                <span>${display}</span>
+                <span class="unread-badge ${chat.unread > 0 ? 'visible' : ''}">!${chat.unread}</span>
+            `;
+            listContainer.appendChild(item);
+        });
+    };
+
+    // 6. OUTPUT
+    renderSection(null, buckets.local);
+    renderSection('/// DIRECT UPLINKS', buckets.private);
+    renderSection('/// SECURE GROUPS', buckets.group);
+    renderSection('/// PUBLIC SECTORS', buckets.pub);
+
+    if (allChats.length === 0 && query !== '') {
+        listContainer.innerHTML = '<div style="padding:15px; color:#444; font-size:0.8em; text-align:center;">NO SIGNALS FOUND</div>';
+    }
 }
 
 // =============================================================================
@@ -574,8 +650,15 @@ inputField.addEventListener('keydown', async (e) => {
             updateMirror();
 
             if (!appState.startsWith('DECIDING')) {
-                const displayVal = val.replace(/\n/g, '<br>');
+                // --- FIX: AUCH EIGENE EINGABE WASCHEN ---
+                // Vorher: const displayVal = val.replace(/\n/g, '<br>');
+
+                // Neu: Erst Tags entschärfen, DANN Zeilenumbrüche machen
+                const safeVal = val.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                const displayVal = safeVal.replace(/\n/g, '<br>');
+
                 printLine(`> ${displayVal}`, 'my-msg');
+                // ----------------------------------------
             }
             await handleInput(val);
         } else {
@@ -1025,7 +1108,16 @@ async function handleInput(text) {
 
         else if (cmd === '/group') {
             const sub = args[1];
-            if (sub === 'create') socket.emit('group_create', args.slice(2));
+             if (sub === 'create') {
+                 // Wir nehmen alle Wörter nach 'create' und bauen sie zu einem String zusammen
+                 const groupName = args.slice(2).join(' ');
+
+                 // Wir senden jetzt ein Objekt an den Server (wie vorhin besprochen)
+                 socket.emit('group_create', {
+                     name: groupName,
+                     invites: [] // Invites lassen wir hier leer, dafür gibt es /group invite
+                 });
+             }
             else if (sub === 'join') socket.emit('group_join_req', args[2]);
             else if (sub === 'leave') socket.emit('group_leave');
             else // --- KICK BEFEHL (Preview Update) ---
@@ -2897,14 +2989,20 @@ window.closeBlogPost = () => {
     renderBlogView(); // Neu rendern (springt in Fall B)
 };
 
-// Editor und Save Funktionen bleiben gleich...
+// Editor anzeigen (Vollständig)
 window.showEditor = (editId = null) => {
-    let post = { title: '', content: '', tags: [], important: false, attachment: null, password: '' }; // Password init    let attachmentInfo = '';
+    let post = { title: '', content: '', tags: [], important: false, attachment: null, password: '' };
+    let attachmentInfo = '';
 
+    // Falls wir editieren, Daten laden
     if (editId) {
-        post = blogCache.find(p => p.id === editId);
-        if (post.attachment) {
-            attachmentInfo = `<div style="color:#0f0; font-size:0.8em; margin-top:5px;">[ CURRENT FILE: ${post.attachment.originalName} ]</div>`;
+        const found = blogCache.find(p => p.id === editId);
+        if (found) {
+            post = found;
+            // Falls schon ein Anhang da ist, Info anzeigen
+            if (post.attachment) {
+                attachmentInfo = `<div style="color:#0f0; font-size:0.8em; margin-top:5px;">[ CURRENT FILE: ${post.attachment.originalName} ]</div>`;
+            }
         }
     }
 
@@ -2912,24 +3010,27 @@ window.showEditor = (editId = null) => {
 
     const editor = document.createElement('div');
     editor.className = 'blog-editor';
+
+    // Wir bauen das HTML jetzt komplett zusammen
     editor.innerHTML = `
         <h3 style="color:#0f0;">>> COMPOSING LOG ENTRY...</h3>
         
         <label>SUBJECT / TITLE:</label>
-        <input type="text" id="edit-title" class="terminal-input" value="${post.title}" placeholder="SYSTEM UPDATE...">
+        <input type="text" id="edit-title" class="terminal-input" value="${post.title || ''}" placeholder="SYSTEM UPDATE...">
         
-        <label>ENCRYPTION KEY (LEAVE EMPTY FOR PUBLIC):</label>
-        <input type="text" id="edit-password" class="terminal-input" value="${post.password || ''}" placeholder="OPTIONAL PASSWORD">
+        <label>ENCRYPTION KEY (OPTIONAL - LEAVE EMPTY FOR PUBLIC):</label>
+        <input type="text" id="edit-password" class="terminal-input" value="${post.password || ''}" placeholder="PASSWORD PROTECTION">
         
         <label>DATA CONTENT (MARKDOWN SUPPORTED):</label>
         <textarea id="edit-content" class="terminal-input" style="height:200px;">${post.content || ''}</textarea>
         
         <label>TAGS (COMMA SEPARATED):</label>
-        <input type="text" id="edit-tags" class="terminal-input" value="${post.tags.join(', ')}">
+        <input type="text" id="edit-tags" class="terminal-input" value="${post.tags ? post.tags.join(', ') : ''}">
         
         <label>ATTACH FILE (OPTIONAL - MAX 5MB):</label>
         <input type="file" id="edit-file" class="terminal-input" style="padding:5px;">
         ${attachmentInfo}
+
         <div style="margin: 15px 0;">
             <input type="checkbox" id="edit-broadcast" ${post.important ? 'checked' : ''}>
             <label for="edit-broadcast" style="color:#f00; font-weight:bold;">INITIATE NETWORK BROADCAST (ALERT)</label>
@@ -2943,60 +3044,68 @@ window.showEditor = (editId = null) => {
     output.appendChild(editor);
 };
 
+// Speichern Funktion (Vollständig mit Passwort & File)
 window.savePost = (id) => {
-    const title = document.getElementById('edit-title').value;
+    // 1. Alle Werte aus den Feldern holen
+    const title = document.getElementById('edit-title').value.trim();
+    const password = document.getElementById('edit-password').value.trim();
     const content = document.getElementById('edit-content').value;
-    const tags = document.getElementById('edit-tags').value.split(',').map(t => t.trim()).filter(t => t);
+    const tagsVal = document.getElementById('edit-tags').value;
+    const tags = tagsVal ? tagsVal.split(',').map(t => t.trim()).filter(t => t) : [];
     const broadcast = document.getElementById('edit-broadcast').checked;
     const fileInput = document.getElementById('edit-file');
-    const password = document.getElementById('edit-password').value.trim();
 
     if (!title || !content) {
         alert("ERROR: EMPTY DATA FIELDS.");
         return;
     }
 
-    // Funktion zum Senden (wird unten aufgerufen)
+    // Hilfsfunktion zum Senden der Daten
     const sendData = (fileObj = null) => {
-        // Altes Attachment behalten, wenn wir editieren und nix neues hochladen?
+        // Wenn wir editieren (id existiert) und KEIN neues File hochladen (fileObj ist null),
+        // müssen wir dem Server sagen, dass er das alte Attachment behalten soll.
         let existingAttachment = null;
         if (id && !fileObj) {
             const oldPost = blogCache.find(p => p.id === id);
-            if (oldPost) existingAttachment = oldPost.attachment;
+            if (oldPost && oldPost.attachment) {
+                existingAttachment = oldPost.attachment;
+            }
         }
 
         socket.emit('blog_post_req', {
             id: id || null,
-            title, content, tags, broadcast,
-            file: fileObj, // Das neue File (oder null)
-            existingAttachment: existingAttachment,
-            password: password
+            title,
+            content,
+            tags,
+            broadcast,
+            password,          // Passwort mitsenden
+            file: fileObj,     // Neues File (oder null)
+            existingAttachment // Altes File (oder null)
         });
+
+        // Nach dem Speichern zurück zur Liste
         activeBlogPostId = null;
     };
 
-    // Haben wir eine neue Datei ausgewählt?
+    // Datei Verarbeitung
     if (fileInput.files.length > 0) {
         const file = fileInput.files[0];
-
-        // Größen-Check (z.B. 5MB Limit um Socket nicht zu verstopfen)
-        if (file.size > 5 * 1024 * 1024) {
+        if (file.size > 5 * 1024 * 1024) { // 5MB Limit
             alert("ERROR: FILE TOO LARGE (MAX 5MB).");
             return;
         }
 
         const reader = new FileReader();
         reader.onload = function(evt) {
-            // Wir senden Name, Größe und den rohen Buffer
             sendData({
                 name: file.name,
                 size: file.size,
-                buffer: evt.target.result // Das ArrayBuffer
+                buffer: evt.target.result // Binärdaten
             });
         };
-        reader.readAsArrayBuffer(file); // WICHTIG: Als Buffer lesen
+        reader.readAsArrayBuffer(file);
     } else {
-        // Keine Datei -> Einfach so speichern
+        // Keine neue Datei -> direkt speichern
         sendData(null);
     }
 };
@@ -3031,6 +3140,19 @@ function formatContent(text) {
         .replace(/`(.*?)`/g, '<code style="background:#222; padding:2px;">$1</code>');
     return html;
 }
+
+// Sidebar Search Listener
+const searchInput = document.getElementById('chat-search-input');
+if (searchInput) {
+    searchInput.addEventListener('input', () => renderChatList());
+}
+
+window.onbeforeunload = () => {
+    // Prüfen, ob wir ein Fileshare-Fenster geöffnet haben und ob es noch offen ist
+    if (fileShareWindow && !fileShareWindow.closed) {
+        fileShareWindow.close(); // Nur DIESES Fenster schließen
+    }
+};
 
 // --- INIT ---
 runBootSequence();

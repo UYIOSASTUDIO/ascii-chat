@@ -58,7 +58,7 @@ html, body {
     flex-grow: 1;
     display: grid;
     /* Deine Original-Aufteilung: 250px Sidebar | Terminal | 30% Info */
-    grid-template-columns: 260px 1fr 380px; /* Rechts fest 300px sieht meist besser aus als 30% */
+    grid-template-columns: 260px 1fr 500px; /* Rechts fest 300px sieht meist besser aus als 30% */
     height: 100%;
     overflow: hidden;
 }
@@ -113,53 +113,64 @@ html, body {
 .unread-badge.visible { display: inline-block; }
 
 /* Voice Panel unten links */
-.voice-panel {
-    border-top: var(--border-thick);
-    padding: 20px;
-    background-color: rgba(0,0,0,0.2);
+#voice-panel {
     display: flex;
     flex-direction: column;
-    align-items: center;     /* Zentriert Kinder horizontal */
-    justify-content: center; /* Zentriert Kinder vertikal */
-    text-align: center;      /* Zentriert Text */
-}
-
-#voice-status {
-    font-size: 0.9em;
-    color: var(--text-muted);
-    margin-bottom: 15px;
+    align-items: center;      /* Horizontal zentrieren */
+    justify-content: center;  /* Vertikal zentrieren */
+    height: 100%;             /* Füllt das halbe Fenster aus */
     width: 100%;
     text-align: center;
 }
 
-#voice-controls {
-    display: flex;
-    justify-content: center;
-    gap: 10px; /* Abstand zwischen Buttons */
+#voice-status {
+    font-size: 0.9em;
+    color: #666; /* var(--text-muted) */
+    margin-bottom: 20px;
     width: 100%;
+    text-align: center;
+    font-weight: bold;
+    letter-spacing: 1px;
 }
 
-#voice-status.active { color: var(--accent-color); text-shadow: 0 0 8px var(--accent-dim); }
-#voice-status.alert { color: #ff4444; animation: blink 1s infinite; }
+#voice-status.active { color: #4af626; text-shadow: 0 0 5px rgba(74, 246, 38, 0.5); }
+#voice-status.alert { color: #ff3333; animation: blink 1s infinite; }
 
 .voice-visualizer {
     display: flex;
-    align-items: flex-end;
-    justify-content: center; /* WICHTIG: Balken mittig ausrichten */
-    height: 30px;
-    gap: 3px;
-    margin-bottom: 15px;
-    opacity: 0.3;
-    width: 100%;
+    align-items: flex-end;    /* Balken wachsen von unten nach oben */
+    justify-content: center;  /* Die Balken-Gruppe in der Mitte halten */
+
+    height: 60px;             /* Höhe des Visualizers */
+    gap: 4px;                 /* Abstand zwischen den Balken */
+    margin-bottom: 20px;      /* Platz nach unten zu den Buttons */
+
+    /* HIER DEINE 15px ABSTÄNDE: */
+    width: calc(100% - 30px); /* 100% Breite minus 15px Links + 15px Rechts */
+    margin-left: 15px;
+    margin-right: 15px;
+
+    opacity: 0.2;
+    transition: opacity 0.3s;
 }
+
 .voice-visualizer.active { opacity: 1; }
 
 .bar {
-    flex: 1;
-    background: var(--accent-color);
+    flex: 1; /* Balken teilen sich den Platz gleichmäßig auf */
+    background-color: #4af626; /* var(--accent-color) */
     height: 3px;
-    transition: height 0.1s ease;
-    border-radius: 1px;
+    transition: height 0.05s ease;
+    max-width: 15px; /* Damit sie bei wenigen Balken nicht riesig breit werden */
+}
+
+/* Container für Buttons zentrieren */
+#voice-controls {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 10px; /* Abstand zwischen den Buttons */
+    width: 100%;
 }
 
 /* --- MITTLERE SPALTE (TERMINAL) --- */
@@ -523,4 +534,37 @@ html, body {
 #unlock-pass:focus {
     box-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
     outline: none;
+}
+
+/* --- SIDEBAR SEARCH --- */
+.sidebar-search-wrapper {
+    padding: 10px;
+    border-bottom: 1px solid var(--border-color);
+    background: rgba(0,0,0,0.2);
+}
+
+#chat-search-input {
+    width: 100%;
+    background: transparent;
+    border: 1px solid var(--border-color);
+    color: var(--accent-color);
+    font-family: inherit;
+    font-size: 0.9em;
+    padding: 5px 8px;
+    outline: none;
+}
+#chat-search-input:focus {
+    border-color: var(--accent-color);
+    background: rgba(74, 246, 38, 0.05);
+}
+
+/* --- CHAT LIST CATEGORIES --- */
+.chat-category-header {
+    padding: 15px 15px 5px 15px; /* Oben mehr Platz für Abstand */
+    font-size: 0.7em;
+    color: #666; /* Dunkles Grau */
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    margin-bottom: 5px;
 }

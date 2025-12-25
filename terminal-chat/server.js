@@ -10,6 +10,7 @@ const qrcode = require('qrcode');
 const crypto = require('crypto');
 const webpush = require('web-push');
 const fs = require('fs'); // <--- WICHTIG für das Speichern der Blog-Posts
+const escapeHtml = require('escape-html');
 
 
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
@@ -346,15 +347,19 @@ io.on('connection', (socket) => {
     });
 
     // 1. REGISTRIERUNG
-    socket.on('register', (username) => {
+    socket.on('register', (usernameInput) => { // Umbenannt zu usernameInput für Klarheit
 
-            // --- NEU: VALIDIERUNG ---
-            // Wenn der Name ungültig ist, brechen wir sofort ab
-            if (!username || username.startsWith('/') || username.trim().length === 0 || username.length > 20) {
-                socket.emit('system_message', 'REGISTRATION ERROR: Invalid username format.');
-                return; // WICHTIG: Hier aufhören, nicht speichern!
-            }
-            // ------------------------
+        // 1. INPUT SANITIZATION (XSS Schutz für Namen)
+        // Wir erlauben kein HTML im Namen!
+        if (!usernameInput || typeof usernameInput !== 'string') return;
+        const username = escapeHtml(usernameInput.trim());
+        // Ab hier arbeiten wir nur noch mit dem sauberen 'username' weiter
+
+        // --- VALIDIERUNG ---
+        if (username.startsWith('/') || username.length === 0 || username.length > 20) {
+            socket.emit('system_message', 'REGISTRATION ERROR: Invalid username format.');
+            return;
+        }
 
         // --- NEU: RESERVIERTER NAME CHECK ---
         if (username.toLowerCase() === 'anonymous') {
@@ -672,19 +677,22 @@ io.on('connection', (socket) => {
     // --- PUBLIC CHAT SYSTEM ---
 
 // PUB CREATE (Sequential IDs & Limit)
-    socket.on('pub_create', (name) => {
+    socket.on('pub_create', (nameInput) => { // <--- WICHTIG: Hier "nameInput" nennen!
         const user = users[socket.id];
         if (!user) return;
 
-        // Temp ID für den Moment (wird gleich überschrieben)
+        // XSS Schutz für Raum-Namen
+        // Jetzt existiert nameInput, weil wir es oben so genannt haben
+        const cleanName = nameInput ? escapeHtml(nameInput.trim()) : null;
+
+        // Temp ID für den Moment
         const tempId = "TEMP_" + Date.now();
         const roomKey = crypto.randomBytes(32).toString('hex');
 
         publicRooms[tempId] = {
             id: tempId,
-            // WICHTIG: Wenn kein Name da ist, nennen wir es explizit "Sector_PENDING"
-            // damit der Reorganizer weiß, dass er es umbenennen muss.
-            name: name || `Sector_PENDING`,
+            // Hier nutzen wir jetzt cleanName (die gesäuberte Version)
+            name: cleanName || `Sector_PENDING`,
             members: [],
             key: roomKey,
             createdAt: Date.now()
@@ -890,18 +898,43 @@ io.on('connection', (socket) => {
 
     // --- PRIVATE GROUP SYSTEM (RBAC) ---
 
-    // 1. GRUPPE ERSTELLEN (/group create [optional: UserIDs])
-    socket.on('group_create', (invitedUserKeys) => {
+// 1. GRUPPE ERSTELLEN (/group create [NAME])
+    socket.on('group_create', (data) => {
         const creator = users[socket.id];
         if (!creator) return;
+
+        // --- INPUT NORMALISIERUNG ---
+        // data kann sein:
+        // A) Ein Array (Alte Version: nur Invites)
+        // B) Ein Objekt (Neue Version: { name: "...", invites: [...] })
+        // C) Leer / undefined
+
+        let invitedUserKeys = [];
+        let desiredName = null;
+
+        if (Array.isArray(data)) {
+            invitedUserKeys = data;
+        } else if (typeof data === 'object' && data !== null) {
+            invitedUserKeys = data.invites || [];
+            desiredName = data.name || null;
+        }
 
         // ID und Schlüssel generieren
         const groupId = Math.floor(Math.random() * 9000) + 1000; // 4-stellige ID
         const groupKey = crypto.randomBytes(32).toString('hex');
 
+        // --- NAME BESTIMMEN & SANITIZEN ---
+        let finalName = `Group_${groupId}`; // Standard Fallback
+
+        if (desiredName && typeof desiredName === 'string' && desiredName.trim().length > 0) {
+            // XSS Schutz + Max Länge 20
+            finalName = escapeHtml(desiredName.trim()).substring(0, 20);
+        }
+        // ----------------------------------
+
         privateGroups[groupId] = {
             id: groupId,
-            name: `Group_${groupId}`, // <--- NEU: Standard-Name setzen!
+            name: finalName, // <--- HIER nutzen wir den Namen
             ownerId: socket.id,
             members: [socket.id],
             mods: [],
@@ -2022,7 +2055,7 @@ io.on('connection', (socket) => {
     });
 
     // 11. GROUP RENAME (/group name [NAME]) - UI UPDATE FIX
-    socket.on('group_rename', (newName) => {
+    socket.on('group_rename', (newNameInput) => { // <--- WICHTIG: Hier "Input" nennen
         // SICHERHEITS-CHECK
         const user = users[socket.id];
         if (!user || !user.currentGroup) return;
@@ -2036,8 +2069,13 @@ io.on('connection', (socket) => {
             return;
         }
 
-        // Validierung
-        if (!newName || newName.trim().length === 0) {
+        // --- XSS SCHUTZ ---
+        // Wir nehmen den "Input", waschen ihn, und speichern ihn als sauberen "newName"
+        const newName = escapeHtml((newNameInput || '').trim());
+        // ------------------
+
+        // Validierung (jetzt mit der sauberen Variable prüfen)
+        if (newName.length === 0) {
             socket.emit('system_message', 'ERROR: Name cannot be empty.');
             return;
         }
@@ -2902,6 +2940,17 @@ io.on('connection', (socket) => {
 
         if (!data.title || !data.content) return;
 
+        // --- SECURITY: ANTI-XSS ---
+        // Markdown bleibt erhalten, aber <script> Tags werden zu &lt;script&gt;
+        const cleanTitle = escapeHtml(data.title);
+        const cleanContent = escapeHtml(data.content);
+
+        // Auch Tags müssen sicher sein (falls Array existiert)
+        let cleanTags = [];
+        if (Array.isArray(data.tags)) {
+            cleanTags = data.tags.map(t => escapeHtml(t));
+        }
+
         // --- NEU: ANHANG VERARBEITEN ---
         let attachmentData = null;
 
@@ -2935,12 +2984,12 @@ io.on('connection', (socket) => {
         const newPost = {
             id: data.id || crypto.randomUUID(),
             timestamp: data.timestamp || Date.now(),
-            title: data.title,
-            content: data.content,
-            author: user.username,
-            tags: data.tags || [],
+            title: cleanTitle,     // <--- Benutzen
+            content: cleanContent, // <--- Benutzen
+            author: user.username, // Der ist schon safe (siehe Register)
+            tags: cleanTags,       // <--- Benutzen
             important: !!data.broadcast,
-            attachment: attachmentData, // <--- Hier speichern wir nur die Referenz!
+            attachment: attachmentData,
             password: data.password || null
         };
 
