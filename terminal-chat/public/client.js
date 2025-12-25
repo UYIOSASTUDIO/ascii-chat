@@ -149,21 +149,18 @@ function getDynamicName(name, key) {
             canUnmask = true;
         }
     }
-    // (In Public Chats darf nur der Admin, was oben schon durch iamAdmin abgedeckt ist)
+    // (In Public Chats darf nur der Admin)
 
     // 3. Ausgabe generieren
     if (canUnmask) {
-
-        const style = "cursor:pointer; border-bottom: 1px dotted #555;";
+        // ERST Variablen definieren
         const title = `ADMIN TOOL: Click to reveal identity & copy ID`;
-
-        // NEU: Wir rufen jetzt handleNameClick auf
         const action = `window.handleNameClick('${key}')`;
 
-        return `<span class="dynamic-name" data-key="${key}" onclick="${action}" title="${title}" style="${style}">${name}</span>`;
+        // DANN return (mit der neuen CSS-Klasse, ohne style-Attribut)
+        return `<span class="dynamic-name dynamic-name-admin" data-key="${key}" onclick="${action}" title="${title}">${name}</span>`;
     } else {
         // Sichere Version für Member (Nur Text, keine ID sichtbar im Tooltip)
-        // (Die ID ist technisch noch im data-key für Updates, aber Otto-Normal-User sieht sie nicht)
         return `<span class="dynamic-name" data-key="${key}">${name}</span>`;
     }
 }
@@ -500,7 +497,7 @@ function getSystemStats() {
 async function runBootSequence() {
     localStorage.removeItem('fs_groups');
     input.disabled = true;
-    promptSpan.style.opacity = '0';
+    promptSpan.className = 'prompt-hidden';
     const stats = getSystemStats();
     const now = new Date();
 
@@ -534,8 +531,7 @@ async function runBootSequence() {
     printLine('Please enter your CODENAME to initialize uplink.', 'my-msg');
 
     promptSpan.textContent = 'IDENTITY>';
-    promptSpan.style.color = '#ff3333';
-    promptSpan.style.opacity = '1';
+    promptSpan.className = 'prompt-error';
     input.disabled = false;
     input.focus();
     renderChatList(); // Sidebar initialisieren
@@ -753,7 +749,7 @@ async function handleInput(text) {
             // Prompt wiederherstellen
             const oldPrompt = promptSpan.getAttribute('data-prev-prompt');
             if (oldPrompt) promptSpan.textContent = oldPrompt;
-            promptSpan.style.color = '#0f0';
+            promptSpan.className = 'prompt-default';
             return;
         }
         else {
@@ -764,7 +760,7 @@ async function handleInput(text) {
         // Wenn wir hier sind, wurde ein Befehl gesendet -> UI Reset
         appState = 'IDLE'; // Wird gleich durch group_left_success korrigiert oder wir landen in Local
         promptSpan.textContent = '>';
-        promptSpan.style.color = '#0f0';
+        promptSpan.className = 'prompt-default';
         return;
     }
 
@@ -776,7 +772,7 @@ async function handleInput(text) {
             pendingJoinGroupId = null;
             appState = 'IDLE';
             promptSpan.textContent = '>';
-            promptSpan.style.color = '#0f0';
+            promptSpan.className = 'prompt-default';
         } else {
             // Passwort an Server senden
             printLine('Verifying credentials...', 'system-msg');
@@ -812,7 +808,7 @@ async function handleInput(text) {
             pendingKickTargets = [];
             appState = 'GROUP_CHATTING'; // oder IDLE
             promptSpan.textContent = promptSpan.getAttribute('data-prev-prompt') || '>';
-            promptSpan.style.color = '#0f0';
+            promptSpan.className = 'prompt-default';
         }
         else {
             printLine('Invalid input. Type [y]es or [n]o.', 'error-msg');
@@ -837,7 +833,7 @@ async function handleInput(text) {
         // Reset
         appState = 'GROUP_CHATTING'; // oder IDLE
         promptSpan.textContent = promptSpan.getAttribute('data-prev-prompt') || '>';
-        promptSpan.style.color = '#0f0';
+        promptSpan.className = 'prompt-default';
         return;
     }
 
@@ -859,7 +855,7 @@ async function handleInput(text) {
             printLine('Admin override aborted.', 'system-msg');
             appState = 'IDLE'; // oder GROUP_CHATTING
             promptSpan.textContent = promptSpan.getAttribute('data-prev-prompt') || '>';
-            promptSpan.style.color = '#ff3333'; // Admin Farbe behalten
+            promptSpan.className = 'prompt-error'; // Admin Farbe behalten
         }
         return;
     }
@@ -1286,7 +1282,7 @@ socket.on('registered', (data) => {
     printLine('----------------------------------------');
 
     promptSpan.textContent = '>';
-    promptSpan.style.color = '#0f0';
+    promptSpan.className = 'prompt-default';
 
     // Push registrieren
     if (data.vapidPublicKey) registerSw(data.vapidPublicKey);
@@ -1726,7 +1722,7 @@ socket.on('group_owner_leave_dialog', () => {
     // Prompt ändern, damit man weiß, wo man ist
     promptSpan.setAttribute('data-prev-prompt', promptSpan.textContent);
     promptSpan.textContent = 'DECISION>';
-    promptSpan.style.color = '#ff3333';
+    promptSpan.className = 'prompt-error';
 
     printLine(' ', '');
     printLine('⚠️  WARNING: YOU ARE THE OWNER  ⚠️', 'error-msg');
@@ -1812,7 +1808,7 @@ socket.on('group_password_required', (groupId) => {
     printLine('Enter password (or type "cancel"):', 'my-msg');
 
     promptSpan.textContent = 'PASSWORD>';
-    promptSpan.style.color = '#ffff00'; // Gelb für Warnung
+    promptSpan.className = 'prompt-warn';
 });
 
 // GROUP BROADCAST EMPFANGEN (Hervorgehoben & Dynamisch)
@@ -1833,16 +1829,10 @@ socket.on('group_broadcast_received', (data) => {
     // 4. Das Design bauen (ASCII Style Box)
     // Wir nutzen CSS Border und Padding für den "Wichtig"-Effekt
     const broadcastHtml = `
-        <div style="border: 2px solid #0f0; background: rgba(0, 255, 0, 0.1); padding: 10px; margin: 5px 0;">
-            <div style="color: #0f0; font-weight: bold; margin-bottom: 5px;">
-                ⚠️ GROUP BROADCAST [${data.role}]
-            </div>
-            <div style="color: #fff; font-style: italic;">
-                "${data.text}"
-            </div>
-            <div style="text-align: right; font-size: 0.8em; color: #0f0; margin-top: 5px;">
-                — ${nameHtml}
-            </div>
+        <div class="group-broadcast-box">
+            <div class="group-broadcast-header">⚠️ GROUP BROADCAST [${data.role}]</div>
+            <div class="group-broadcast-text">"${data.text}"</div>
+            <div class="group-broadcast-footer">— ${nameHtml}</div>
         </div>
     `;
 
@@ -2126,7 +2116,7 @@ socket.on('group_kick_preview_res', (list) => {
     // Prompt ändern
     promptSpan.setAttribute('data-prev-prompt', promptSpan.textContent);
     promptSpan.textContent = 'REASON? [y/n]>';
-    promptSpan.style.color = '#ff3333';
+    promptSpan.className = 'prompt-error';
 });
 
 // BEFÖRDERUNG EMPFANGEN
@@ -2202,7 +2192,7 @@ socket.on('admin_kick_owner_start', (data) => {
     printLine('Do you want to proceed? [y/n]', 'my-msg');
 
     promptSpan.textContent = 'CONFIRM>';
-    promptSpan.style.color = '#ff3333';
+    promptSpan.className = 'prompt-error';
 });
 
 // --- PRIVATE LEAVE EVENTS ---
@@ -2297,10 +2287,11 @@ socket.on('promo_update', (list) => {
             input.focus();
         };
 
+        div.className = 'promo-item';
         div.innerHTML = `
-            <div style="color:#fff; font-weight:bold;">${g.name} [${g.count}]</div>
-            <div style="color:#888; font-size:0.8em; margin-top:2px;">${g.desc}</div>
-            <div style="color:#444; font-size:0.7em; margin-top:2px;">ID: ${g.id}</div>
+            <div class="promo-name">${g.name} [${g.count}]</div>
+            <div class="promo-desc">${g.desc}</div>
+            <div class="promo-meta">ID: ${g.id}</div>
         `;
         el.appendChild(div);
     });
@@ -2316,7 +2307,7 @@ socket.on('admin_success', (msg) => {
 
     // UI Update: Prompt rot machen und Tag hinzufügen
     promptSpan.textContent = `ADMIN/${myUsername}>`;
-    promptSpan.style.color = '#ff3333'; // Rot für Admin-Power
+    promptSpan.className = 'prompt-error';
 });
 
 // GLOBAL BROADCAST EMPFANGEN (Das hat auch gefehlt!)
@@ -2325,17 +2316,11 @@ socket.on('global_broadcast_received', (data) => {
     const initialName = data.isGhost ? 'Anonymous' : data.senderName;
 
     const broadcastHtml = `
-        <div style="border: 2px solid #f00; background: rgba(255, 0, 0, 0.1); padding: 15px; margin: 10px 0;">
-            <div style="color: #f00; font-weight: bold; font-size: 1.1em; margin-bottom: 8px; text-align: center;">
-                ⚠️ GLOBAL SYSTEM BROADCAST ⚠️
-            </div>
-            <div style="color: #fff; font-size: 1.1em; text-align: center;">
-                "${data.text}"
-            </div>
-            <div style="text-align: right; font-size: 0.8em; color: #f00; margin-top: 10px;">
-                — AUTHORITY: [ADMIN] ${initialName}
-            </div>
-        </div>
+    <div class="broadcast-box">
+        <div class="broadcast-title">⚠️ GLOBAL SYSTEM BROADCAST ⚠️</div>
+        <div class="broadcast-text">"${data.text}"</div>
+        <div class="broadcast-footer">— AUTHORITY: [ADMIN] ${initialName}</div>
+    </div>
     `;
 
     if (myChats[target]) {
@@ -2779,9 +2764,9 @@ function toggleBlogView() {
         if (oldPrompt) promptSpan.textContent = oldPrompt;
 
         if (appState === 'BOOTING') {
-            promptSpan.style.color = '#ff3333';
+            promptSpan.className = 'prompt-error';
         } else {
-            promptSpan.style.color = '#0f0';
+            promptSpan.className = 'prompt-default';
         }
 
         switchChat(activeChatId);

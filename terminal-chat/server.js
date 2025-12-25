@@ -11,6 +11,8 @@ const crypto = require('crypto');
 const webpush = require('web-push');
 const fs = require('fs'); // <--- WICHTIG für das Speichern der Blog-Posts
 const escapeHtml = require('escape-html');
+const helmet = require('helmet');
+const rateLimit = require('express-rate-limit');
 
 
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
@@ -87,20 +89,34 @@ function serverError(msg) {
     console.error(`[ERROR ${time}] ⚠️ ${msg}`);
 }
 
-// SECURITY HEADERS (Content Security Policy)
-// Wir erlauben hier explizit Google Fonts und Flaticon Images
-app.use((req, res, next) => {
-    res.setHeader(
-        "Content-Security-Policy",
-        "default-src 'self'; " +
-        "script-src 'self' 'unsafe-inline'; " +
-        "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; " + // Erlaubt Fonts CSS
-        "font-src 'self' https://fonts.gstatic.com; " + // Erlaubt die Font-Dateien
-        "img-src 'self' data: https://cdn-icons-png.flaticon.com; " + // Erlaubt das Push-Icon
-        "connect-src 'self' ws: wss:;"
-    );
-    next();
+// --- SECURITY: HELMET (HTTP HEADERS) ---
+app.use(helmet({
+    contentSecurityPolicy: {
+        directives: {
+            defaultSrc: ["'self'"],
+            scriptSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline für deine JS-Logik nötig
+            styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
+            fontSrc: ["'self'", "https://fonts.gstatic.com"],
+            imgSrc: ["'self'", "data:", "https://cdn-icons-png.flaticon.com"],
+            connectSrc: ["'self'", "ws:", "wss:"], // Wichtig für Socket.IO
+            upgradeInsecureRequests: [], // Deaktivieren, falls du lokal ohne HTTPS testest
+        },
+    },
+    crossOriginEmbedderPolicy: false, // Deaktivieren, damit Bilder laden
+}));
+
+// --- SECURITY: RATE LIMITING (DDoS Schutz) ---
+// Erlaubt maximal 100 Anfragen pro 15 Minuten pro IP
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 Minuten
+    max: 100, // Limit pro IP
+    standardHeaders: true,
+    legacyHeaders: false,
+    message: "SYSTEM ALERT: Traffic limit exceeded. Connection throttled."
 });
+
+// Wende das Limit auf alle HTTP-Routen an (Uploads, HTML, etc.)
+app.use(limiter);
 
 const server = http.createServer(app);
 const io = new Server(server);
@@ -115,7 +131,14 @@ let deadDrops = {};
 let activeShares = {};
 
 // --- BLOG SYSTEM CONFIG ---
-const BLOG_FILE = path.join(__dirname, 'system_logs.json');
+const DATA_DIR = path.join(__dirname, 'secure_storage');
+
+// Falls der Ordner nicht existiert, erstellen wir ihn
+if (!fs.existsSync(DATA_DIR)) {
+    fs.mkdirSync(DATA_DIR, { recursive: true });
+}
+
+const BLOG_FILE = path.join(DATA_DIR, 'system_logs.json');
 let blogPosts = [];
 
 // Blog beim Start laden
@@ -187,39 +210,72 @@ io.on('connection', (socket) => {
     // ANONYM: Wir loggen nicht die ID, nur dass eine Verbindung besteht
     serverLog(`Neue Verbindung (Socket) hergestellt.`);
 
-    // --- FILE SYSTEM AUTHENTIFIZIERUNG ---
-// --- LOGIN HANDLER ---
-    socket.on('fs_login', (data) => {
-        socket.username = data.username;
-        console.log(`[LOGIN] User: ${socket.username} (ID: ${socket.id})`);
+    // --- SOCKET SPAM PROTECTION MIDDLEWARE ---
+    // Wir nutzen ein einfaches Token-Bucket System pro Socket
+    socket.packetCount = 0;
+    const SPAM_THRESHOLD = 20; // Max 20 Events pro Sekunde
+    const spamReset = setInterval(() => {
+        socket.packetCount = 0;
+    }, 1000);
 
-        // NEU: Gruppen beitreten!
-        // Der Client schickt uns eine Liste von Gruppen, in die er rein will
+    // Middleware für JEDES eingehende Paket
+    socket.use((packet, next) => {
+        socket.packetCount++;
+        if (socket.packetCount > SPAM_THRESHOLD) {
+            // Zu schnell!
+            if (socket.packetCount === SPAM_THRESHOLD + 1) {
+                socket.emit('system_message', 'WARNING: Uplink unstable. Slow down.');
+                serverLog(`Spam detected from ${socket.username || socket.id}`);
+            }
+            // Wir ignorieren das Paket, rufen next() NICHT auf
+            return;
+        }
+        next();
+    });
+
+    // --- FILE SYSTEM AUTHENTIFIZIERUNG ---
+    // --- LOGIN HANDLER (FILE SYSTEM) ---
+    socket.on('fs_login', (data) => {
+        socket.username = escapeHtml(data.username || 'Anonymous'); // XSS Schutz auch hier
+        // Wir nehmen den User aus der Haupt-Liste, falls er eingeloggt ist
+        const mainUser = Object.values(users).find(u => u.username === socket.username);
+
+        console.log(`[LOGIN] FS User: ${socket.username} (ID: ${socket.id})`);
+
+        // VALIDIERUNG: Gruppen beitreten
         if (data.groups && Array.isArray(data.groups)) {
-            data.groups.forEach(groupName => {
-                socket.join(groupName);
-                console.log(`   -> Joined Room: ${groupName}`);
+            data.groups.forEach(roomName => {
+                // roomName ist z.B. "group_1234" oder "pub_0001"
+
+                // 1. Ist es eine Private Gruppe?
+                if (roomName.startsWith('group_')) {
+                    const groupId = roomName.replace('group_', '');
+                    const group = privateGroups[groupId];
+
+                    // PRAGMATISCHE LÖSUNG: Wir prüfen, ob es einen Haupt-User mit diesem Namen gibt, der in der Gruppe ist.
+                    const isLegitMember = group && group.members.some(memberSocketId => {
+                        const u = users[memberSocketId];
+                        return u && u.username === socket.username;
+                    });
+
+                    if (isLegitMember) {
+                        socket.join(roomName);
+                        // console.log(`   -> Re-joined Room: ${roomName} (Authorized)`);
+                    } else {
+                        console.log(`   -> BLOCKED join attempt to ${roomName} (Unauthorized)`);
+                    }
+                }
+                // 2. Public Rooms sind okay (da eh public)
+                else if (roomName.startsWith('pub_')) {
+                    socket.join(roomName);
+                }
             });
         }
 
-        // Name in aktiven Shares updaten (falls vorhanden)
+        // Name in aktiven Shares updaten
         if (activeShares[socket.id]) {
             activeShares[socket.id].username = socket.username;
             broadcastShares();
-        }
-    });
-
-    // 5. P2P SIGNALING (Die Telefonvermittlung)
-    socket.on('p2p_signal', (data) => {
-        // data: { targetId, signal, type }
-        // Wir leiten die Nachricht einfach an den Ziel-Socket weiter
-        const targetSocket = io.sockets.sockets.get(data.targetId);
-        if (targetSocket) {
-            targetSocket.emit('p2p_signal', {
-                senderId: socket.id,
-                signal: data.signal,
-                type: data.type
-            });
         }
     });
 
@@ -934,12 +990,13 @@ io.on('connection', (socket) => {
 
         privateGroups[groupId] = {
             id: groupId,
-            name: finalName, // <--- HIER nutzen wir den Namen
+            name: finalName,
             ownerId: socket.id,
             members: [socket.id],
             mods: [],
             key: groupKey,
-            pendingJoins: [],
+            pendingJoins: [], // Das sind Leute, die rein WOLLEN (Join Request)
+            invitedUsers: [], // <--- NEU: Das sind Leute, die wir eingeladen HABEN
             isPublic: false
         };
 
@@ -1144,14 +1201,22 @@ io.on('connection', (socket) => {
                 if (group.members.includes(targetUser.id)) {
                     socket.emit('system_message', `INFO: User ${targetUser.username} is already in the group.`);
                 } else {
-                    // SEND INVITE with RICH DATA
+
+                    // --- NEU: AUF DIE SERVER-LISTE SETZEN ---
+                    if (!group.invitedUsers) group.invitedUsers = []; // Safety Init
+                    if (!group.invitedUsers.includes(targetUser.id)) {
+                        group.invitedUsers.push(targetUser.id);
+                    }
+                    // ----------------------------------------
+
+                    // SEND INVITE (Bleibt gleich)
                     io.to(targetUser.id).emit('group_invite_received', {
                         groupId: group.id,
                         groupName: group.name,
                         inviterName: user.username,
                         inviterKey: user.key,
-                        inviterRole: myRole, // MEMBER/MOD/OWNER
-                        isGhost: !!user.isGhost // Für dynamischen Namen
+                        inviterRole: myRole,
+                        isGhost: !!user.isGhost
                     });
 
                     sendPush(targetUser, 'GROUP INVITATION', `User ${user.username} invited you to ${group.name}.`);
@@ -1167,39 +1232,70 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 4. INVITE / JOIN ANNEHMEN (Entscheidung - Ghost Fix Final)
+    // 4. INVITE / JOIN ANNEHMEN
     socket.on('group_decision', (data) => {
         const user = users[socket.id];
+        if (!user) return; // Crash Schutz
 
-        // FALL A: User nimmt Einladung an (Hier ändert sich nichts)
+        // FALL A: User nimmt Einladung an (Hier war die Lücke!)
         if (data.groupId) {
             const group = privateGroups[data.groupId];
-            if (!group) return;
+
+            // 1. Existiert die Gruppe?
+            if (!group) {
+                socket.emit('system_message', 'ERROR: Group not found.');
+                return;
+            }
+
+            // 2. SICHERHEITS-CHECK: Wurde er wirklich eingeladen?
+            // Wir prüfen, ob seine ID in der 'invitedUsers' Liste steht.
+            const isInvited = group.invitedUsers && group.invitedUsers.includes(socket.id);
+
+            // Ausnahme: Wenn die Gruppe PUBLIC ist, darf jeder rein (optional, aber logisch)
+            if (!isInvited && !group.isPublic) {
+                serverLog(`SECURITY ALERT: User ${user.username} tried to force-join Group ${group.id} without invite.`);
+                socket.emit('system_message', 'ACCESS DENIED: You have no valid invitation for this secure channel.');
+                return; // STOPP! Hier kommt niemand rein.
+            }
 
             if (data.accept) {
                 socket.join(`group_${group.id}`);
                 group.members.push(socket.id);
                 user.currentGroup = group.id;
 
-                // Event senden
+                // WICHTIG: Einladung verbrauchen (löschen)
+                if (group.invitedUsers) {
+                    group.invitedUsers = group.invitedUsers.filter(id => id !== socket.id);
+                }
+
+                // Event senden (Status Update)
                 io.to(`group_${group.id}`).emit('room_user_status', {
                     username: user.username,
                     key: user.key,
-                    isGhost: !!user.isGhost, // Force Boolean
+                    isGhost: !!user.isGhost,
                     type: 'join',
                     context: 'group',
                     roomId: group.id
                 });
 
-                // Bestätigung für den User selbst
+                // Bestätigung für den User
                 socket.emit('group_joined_success', {
                     id: group.id,
                     name: group.name,
                     key: group.key,
                     role: 'MEMBER'
                 });
+
+                // Promo Update
+                io.emit('promo_update', generatePromoList());
+
             } else {
                 socket.emit('system_message', 'Invitation declined.');
+                // Optional: Auch beim Ablehnen von der Liste nehmen?
+                // Besser ja, damit die Einladung nicht ewig "schwebt".
+                if (group.invitedUsers) {
+                    group.invitedUsers = group.invitedUsers.filter(id => id !== socket.id);
+                }
             }
         }
 
@@ -1792,6 +1888,14 @@ io.on('connection', (socket) => {
 
         const group = privateGroups[user.currentGroup];
         if (!group) return;
+
+        // --- SICHERHEITS-CHECK: Ist er noch Mitglied? ---
+        if (!group.members.includes(socket.id)) {
+            // Falls nicht: Status korrigieren und blockieren
+            user.currentGroup = null;
+            socket.emit('system_message', 'ERROR: You are no longer a member of this group.');
+            return;
+        }
 
         // TAGS SETZEN (Owner, Mod, Admin)
         let displayName = user.username;
@@ -2500,22 +2604,49 @@ io.on('connection', (socket) => {
 
     // --- WEBRTC SIGNALING & VOICE (Multi-Chat Update) ---
 
-    // 1. P2P SIGNAL (Für Audio & Dateien)
+    // 1. P2P SIGNAL (Sicher & Universal)
     socket.on('p2p_signal', (data) => {
-        // data: { targetKey, type, payload, ... }
+        // data: { targetKey, targetId, type, payload, ... }
         const user = users[socket.id];
-        if (!user || !data.targetKey) return;
+        // Fileshare nutzt oft targetId (SocketID), Chat nutzt targetKey (UserKey)
 
-        const targetUser = Object.values(users).find(u => u.key === data.targetKey);
+        let targetSocketId = null;
 
-        // Sicherheits-Check: Sind wir verbunden?
-        if (targetUser && user.partners.includes(targetUser.id)) {
-            io.to(targetUser.id).emit('p2p_signal', {
-                senderKey: user.key, // Damit der Empfänger weiß, von wem das Signal kommt
+        // Fall A: Ziel via Key (Chat)
+        if (data.targetKey) {
+            const t = Object.values(users).find(u => u.key === data.targetKey);
+            if (t) targetSocketId = t.id;
+        }
+        // Fall B: Ziel via SocketID (Fileshare)
+        else if (data.targetId) {
+            targetSocketId = data.targetId;
+        }
+
+        if (!targetSocketId) return;
+
+        // --- ZUGRIFFSKONTROLLE ---
+        let allowed = false;
+
+        // 1. Sind wir Chat-Partner? (Streng)
+        if (user && user.partners.includes(targetSocketId)) {
+            allowed = true;
+        }
+
+        if (!allowed && activeShares[targetSocketId]) {
+            allowed = true;
+        }
+
+        // Nur senden, wenn erlaubt
+        if (allowed) {
+            io.to(targetSocketId).emit('p2p_signal', {
+                senderKey: user ? user.key : null,
+                senderId: socket.id, // Für Fileshare wichtig
                 type: data.type,
                 payload: data.payload,
                 metadata: data.metadata
             });
+        } else {
+            // console.log("Blocked unauthorized P2P signal");
         }
     });
 
@@ -2568,6 +2699,7 @@ io.on('connection', (socket) => {
 
     // --- DISCONNECT HANDLING ---
     socket.on('disconnect', () => {
+        clearInterval(spamReset);
         // 1. User identifizieren
         const user = users[socket.id];
 
@@ -2951,35 +3083,51 @@ io.on('connection', (socket) => {
             cleanTags = data.tags.map(t => escapeHtml(t));
         }
 
-        // --- NEU: ANHANG VERARBEITEN ---
         let attachmentData = null;
 
-        // Hat der Client eine Datei mitgeschickt?
         if (data.file && data.file.buffer) {
             try {
-                // Einzigartigen Namen generieren (Timestamp_OriginalName)
-                const safeName = Date.now() + '_' + data.file.name.replace(/[^a-z0-9.]/gi, '_');
-                const filePath = path.join(UPLOAD_DIR, safeName);
+                // 1. DATEINAMEN SÄUBERN (Nur Buchstaben, Zahlen, Punkt, Strich)
+                // Verhindert "Path Traversal" (../../hack.txt)
+                const originalName = data.file.name || 'unknown_file';
+                const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-                // Datei physisch speichern
+                // 2. ENDUNG PRÜFEN (Blacklist)
+                const ext = path.extname(cleanName).toLowerCase();
+                const forbiddenExts = ['.exe', '.bat', '.cmd', '.sh', '.php', '.pl', '.cgi', '.jar', '.js', '.html', '.htm', '.css', '.svg', '.xml'];
+                if (forbiddenExts.includes(ext)) {
+                    socket.emit('system_message', 'SECURITY ALERT: File type strictly prohibited.');
+                    return; // Abbruch!
+                }
+
+                // 3. GRÖSSEN-CHECK (Server Authority) - Max 10 MB
+                const MAX_SIZE = 10 * 1024 * 1024;
+                if (data.file.size > MAX_SIZE || data.file.buffer.length > MAX_SIZE) {
+                    socket.emit('system_message', 'ERROR: File exceeds maximum size limit (10MB).');
+                    return;
+                }
+
+                // 4. SPEICHERN
+                const uniquePrefix = Date.now();
+                const safeFilename = `${uniquePrefix}_${cleanName}`;
+                const filePath = path.join(UPLOAD_DIR, safeFilename);
+
                 fs.writeFileSync(filePath, data.file.buffer);
 
-                // Metadaten für die DB
                 attachmentData = {
-                    originalName: data.file.name,
-                    filename: safeName,
-                    path: '/uploads/' + safeName, // Pfad für den Browser
+                    originalName: cleanName, // Wir zeigen den gesäuberten Namen
+                    filename: safeFilename,
+                    path: '/uploads/' + safeFilename,
                     size: data.file.size
                 };
             } catch (err) {
                 console.error("Upload Error:", err);
-                return socket.emit('system_message', 'ERROR: File upload failed.');
+                return socket.emit('system_message', 'ERROR: Upload protocol failed.');
             }
         } else if (data.existingAttachment) {
-            // Wenn wir editieren und das alte File behalten wollen
             attachmentData = data.existingAttachment;
         }
-        // -------------------------------
+        // ------------------------------------------------
 
         const newPost = {
             id: data.id || crypto.randomUUID(),
@@ -3028,11 +3176,6 @@ io.on('connection', (socket) => {
     });
 
 
-});
-
-const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 SYSTEM ONLINE: Server running on port ${PORT}`);
 });
 
 // --- HELPER: PUBLIC ROOMS NEU ORGANISIEREN ---
@@ -3101,3 +3244,28 @@ function generatePromoList() {
             date: g.promotedAt
         }));
 }
+
+// --- SAFETY NET: GLOBAL ERROR HANDLING ---
+
+// Fängt Fehler im Express-Teil ab (z.B. Upload Fehler)
+app.use((err, req, res, next) => {
+    console.error("[EXPRESS ERROR]", err.stack);
+    res.status(500).send('INTERNAL SYSTEM ERROR');
+});
+
+// Fängt Fehler ab, die den ganzen Prozess töten würden (z.B. Syntax-Fehler im laufenden Betrieb)
+process.on('uncaughtException', (err) => {
+    serverError(`CRITICAL PROCESS ERROR: ${err.message}`);
+    console.error(err.stack);
+    // WICHTIG: Im echten Betrieb würde man hier neustarten,
+    // aber wir halten den Prozess am Leben, damit der Chat nicht stirbt.
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    serverError(`UNHANDLED PROMISE REJECTION: ${reason}`);
+});
+
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+    console.log(`🚀 SYSTEM ONLINE: Server running on port ${PORT}`);
+});

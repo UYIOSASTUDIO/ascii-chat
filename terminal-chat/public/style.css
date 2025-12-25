@@ -568,3 +568,67 @@ html, body {
     border-bottom: 1px solid rgba(255,255,255,0.05);
     margin-bottom: 5px;
 }
+
+/* --------------------------------------------------- */
+
+/* --- PHASE 4: STATE CLASSES (JS REFACTORING) --- */
+
+/* 1. Prompt Farben */
+.prompt-default { color: var(--accent-color) !important; opacity: 1; }
+.prompt-error   { color: #ff3333 !important; }   /* Rot (Admin/Error) */
+.prompt-warn    { color: #ffff00 !important; }   /* Gelb (Passwort/Warnung) */
+.prompt-hidden  { opacity: 0 !important; }       /* Boot Sequenz */
+
+/* 2. Input Zustände */
+.input-locked {
+    border-bottom: 1px solid #ff3333 !important;
+    color: #ff3333 !important;
+    pointer-events: none;
+}
+.input-hidden { visibility: hidden; }
+
+/* 3. Promo List Styles (Dynamisch generiert) */
+.promo-item {
+    margin-bottom: 10px;
+    border-bottom: 1px dashed #333;
+    padding-bottom: 5px;
+    cursor: pointer;
+    transition: background 0.2s;
+}
+.promo-item:hover { background: rgba(255, 255, 255, 0.05); }
+.promo-name { color: #fff; font-weight: bold; }
+.promo-desc { color: #888; font-size: 0.8em; margin-top: 2px; }
+.promo-meta { color: #444; font-size: 0.7em; margin-top: 2px; }
+
+/* 4. Global Broadcast Box */
+.broadcast-box {
+    border: 2px solid #f00;
+    background: rgba(255, 0, 0, 0.1);
+    padding: 15px;
+    margin: 10px 0;
+}
+.broadcast-title {
+    color: #f00; font-weight: bold; font-size: 1.1em;
+    margin-bottom: 8px; text-align: center;
+}
+.broadcast-text { color: #fff; font-size: 1.1em; text-align: center; }
+.broadcast-footer { text-align: right; font-size: 0.8em; color: #f00; margin-top: 10px; }
+
+/* 5. Group Broadcast Box */
+.group-broadcast-box {
+    border: 2px solid #0f0;
+    background: rgba(0, 255, 0, 0.1);
+    padding: 10px;
+    margin: 5px 0;
+}
+.group-broadcast-header { color: #0f0; font-weight: bold; margin-bottom: 5px; }
+.group-broadcast-text   { color: #fff; font-style: italic; }
+.group-broadcast-footer { text-align: right; font-size: 0.8em; color: #0f0; margin-top: 5px; }
+
+/* 6. Dynamic Name (Admin Tooltip) */
+.dynamic-name-admin {
+    cursor: pointer;
+    border-bottom: 1px dotted #555;
+}
+
+/* --------------------------------------------------- */
