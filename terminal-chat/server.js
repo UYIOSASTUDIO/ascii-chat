@@ -9,6 +9,8 @@ const speakeasy = require('speakeasy');
 const qrcode = require('qrcode');
 const crypto = require('crypto');
 const webpush = require('web-push');
+const fs = require('fs'); // <--- WICHTIG für das Speichern der Blog-Posts
+
 
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
 const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
@@ -111,6 +113,39 @@ let deadDrops = {};
 
 let activeShares = {};
 
+// --- BLOG SYSTEM CONFIG ---
+const BLOG_FILE = path.join(__dirname, 'system_logs.json');
+let blogPosts = [];
+
+// Blog beim Start laden
+if (fs.existsSync(BLOG_FILE)) {
+    try {
+        blogPosts = JSON.parse(fs.readFileSync(BLOG_FILE, 'utf8'));
+        console.log(`[SYSTEM] Loaded ${blogPosts.length} log entries.`);
+    } catch (e) {
+        console.error("Error loading blog:", e);
+    }
+} else {
+    // Dummy Post erstellen, falls leer
+    blogPosts.push({
+        id: 'INIT_SEQ',
+        timestamp: Date.now(),
+        title: 'SYSTEM INITIALIZATION',
+        content: 'Core systems online. Encryption active. Welcome to the network.',
+        author: 'SYSTEM',
+        tags: ['BOOT', 'INFO']
+    });
+}
+
+function saveBlog() {
+    fs.writeFileSync(BLOG_FILE, JSON.stringify(blogPosts, null, 2));
+}
+
+// Upload Ordner sicherstellen
+const UPLOAD_DIR = path.join(__dirname, 'public', 'uploads');
+if (!fs.existsSync(UPLOAD_DIR)) {
+    fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+}
 
 // Hilfsfunktion: Verbindung sauber trennen
 function disconnectPartner(userId) {
@@ -2809,6 +2844,138 @@ io.on('connection', (socket) => {
     // 4. Neuer User kommt rein -> Liste anfordern
     socket.on('fs_request_update', () => {
         socket.emit('fs_update_shares', activeShares);
+    });
+
+    // --- BLOG / SYSTEM LOGS SYSTEM ---
+
+// 1. LISTE ANFORDERN (Mit Sicherheits-Filter)
+    socket.on('blog_list_req', () => {
+        const user = users[socket.id];
+        const isAdmin = user && user.isAdmin;
+
+        // Wir erstellen eine Kopie für den Client
+        const sanitized = blogPosts.map(p => {
+            // Wenn Admin ODER kein Passwort -> Alles senden
+            if (!p.password || isAdmin) {
+                return p;
+            }
+
+            // Wenn Passwort geschützt und KEIN Admin -> Inhalt verstecken
+            return {
+                id: p.id,
+                timestamp: p.timestamp,
+                title: p.title,
+                tags: p.tags,
+                important: p.important,
+                author: p.author,
+                isProtected: true // Signal für Client: "Hier ist ein Schloss davor"
+                // content, attachment und password FEHLEN hier absichtlich!
+            };
+        });
+
+        // Sortieren
+        sanitized.sort((a, b) => b.timestamp - a.timestamp);
+        socket.emit('blog_list_res', sanitized);
+    });
+
+    // 1b. GESCHÜTZTEN INHALT ANFORDERN
+    socket.on('blog_unlock_req', (data) => {
+        const post = blogPosts.find(p => p.id === data.id);
+
+        if (!post) return socket.emit('system_message', 'ERROR: Data not found.');
+
+        // Passwort prüfen
+        if (post.password === data.password) {
+            // Erfolg: Wir senden den VOLLEN Post an diesen einen User
+            socket.emit('blog_unlock_success', post);
+        } else {
+            socket.emit('system_message', 'ACCESS DENIED: Invalid Decryption Key.');
+        }
+    });
+
+    // 2. EINTRAG ERSTELLEN / EDITIEREN (Mit File Support)
+    socket.on('blog_post_req', (data) => {
+        const user = users[socket.id];
+        if (!user || !user.isAdmin) {
+            return socket.emit('system_message', 'ACCESS DENIED: Insufficient write permissions.');
+        }
+
+        if (!data.title || !data.content) return;
+
+        // --- NEU: ANHANG VERARBEITEN ---
+        let attachmentData = null;
+
+        // Hat der Client eine Datei mitgeschickt?
+        if (data.file && data.file.buffer) {
+            try {
+                // Einzigartigen Namen generieren (Timestamp_OriginalName)
+                const safeName = Date.now() + '_' + data.file.name.replace(/[^a-z0-9.]/gi, '_');
+                const filePath = path.join(UPLOAD_DIR, safeName);
+
+                // Datei physisch speichern
+                fs.writeFileSync(filePath, data.file.buffer);
+
+                // Metadaten für die DB
+                attachmentData = {
+                    originalName: data.file.name,
+                    filename: safeName,
+                    path: '/uploads/' + safeName, // Pfad für den Browser
+                    size: data.file.size
+                };
+            } catch (err) {
+                console.error("Upload Error:", err);
+                return socket.emit('system_message', 'ERROR: File upload failed.');
+            }
+        } else if (data.existingAttachment) {
+            // Wenn wir editieren und das alte File behalten wollen
+            attachmentData = data.existingAttachment;
+        }
+        // -------------------------------
+
+        const newPost = {
+            id: data.id || crypto.randomUUID(),
+            timestamp: data.timestamp || Date.now(),
+            title: data.title,
+            content: data.content,
+            author: user.username,
+            tags: data.tags || [],
+            important: !!data.broadcast,
+            attachment: attachmentData, // <--- Hier speichern wir nur die Referenz!
+            password: data.password || null
+        };
+
+        const existingIndex = blogPosts.findIndex(p => p.id === newPost.id);
+        if (existingIndex >= 0) {
+            // Falls beim Editieren kein neues File kam, aber ein altes da war -> behalten
+            if (!newPost.attachment && blogPosts[existingIndex].attachment) {
+                // Logik oben (data.existingAttachment) regelt das eigentlich,
+                // aber sicherheitshalber überschreiben wir es nicht mit null, falls gewollt.
+            }
+            blogPosts[existingIndex] = newPost;
+        } else {
+            blogPosts.push(newPost);
+        }
+
+        saveBlog();
+
+        socket.emit('blog_action_success', 'Log entry committed to database.');
+        io.emit('blog_update_signal');
+
+        if (data.broadcast) {
+            io.emit('system_message', `⚠️ NEW SYSTEM LOG: ${data.title}`);
+        }
+    });
+
+    // 3. EINTRAG LÖSCHEN (Nur Admin)
+    socket.on('blog_delete_req', (id) => {
+        const user = users[socket.id];
+        if (!user || !user.isAdmin) return socket.emit('system_message', 'ACCESS DENIED.');
+
+        blogPosts = blogPosts.filter(p => p.id !== id);
+        saveBlog();
+
+        socket.emit('blog_action_success', 'Entry purged from archives.');
+        io.emit('blog_update_signal');
     });
 
 

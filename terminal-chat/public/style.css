@@ -58,7 +58,7 @@ html, body {
     flex-grow: 1;
     display: grid;
     /* Deine Original-Aufteilung: 250px Sidebar | Terminal | 30% Info */
-    grid-template-columns: 260px 1fr 300px; /* Rechts fest 300px sieht meist besser aus als 30% */
+    grid-template-columns: 260px 1fr 380px; /* Rechts fest 300px sieht meist besser aus als 30% */
     height: 100%;
     overflow: hidden;
 }
@@ -119,23 +119,36 @@ html, body {
     background-color: rgba(0,0,0,0.2);
     display: flex;
     flex-direction: column;
-    align-items: center;
+    align-items: center;     /* Zentriert Kinder horizontal */
+    justify-content: center; /* Zentriert Kinder vertikal */
+    text-align: center;      /* Zentriert Text */
 }
 
 #voice-status {
     font-size: 0.9em;
     color: var(--text-muted);
-    margin-bottom: 10px;
+    margin-bottom: 15px;
+    width: 100%;
+    text-align: center;
 }
+
+#voice-controls {
+    display: flex;
+    justify-content: center;
+    gap: 10px; /* Abstand zwischen Buttons */
+    width: 100%;
+}
+
 #voice-status.active { color: var(--accent-color); text-shadow: 0 0 8px var(--accent-dim); }
 #voice-status.alert { color: #ff4444; animation: blink 1s infinite; }
 
 .voice-visualizer {
     display: flex;
     align-items: flex-end;
+    justify-content: center; /* WICHTIG: Balken mittig ausrichten */
     height: 30px;
-    gap: 2px;
-    margin-bottom: 10px;
+    gap: 3px;
+    margin-bottom: 15px;
     opacity: 0.3;
     width: 100%;
 }
@@ -415,4 +428,99 @@ html, body {
         grid-template-rows: 60% 40%;
     }
     .sidebar-col, .side-col { display: none; } /* Mobile Logik später */
+}
+
+/* --- SYSTEM LOGS / BLOG STYLES (DASHBOARD & DETAIL) --- */
+
+/* LIST VIEW ITEMS (Kompakt) */
+.blog-entry-item {
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    padding: 12px 15px;
+    margin-bottom: 8px;
+    background: rgba(0, 0, 0, 0.3);
+    cursor: pointer; /* Zeigt, dass es klickbar ist */
+    transition: all 0.2s;
+    display: flex;
+    align-items: center;
+}
+
+.blog-entry-item:hover {
+    border-color: var(--accent-color);
+    background: rgba(74, 246, 38, 0.1);
+    padding-left: 20px; /* Kleiner Slide-Effekt */
+}
+
+.blog-entry-item.important {
+    border-color: #ff3333;
+    color: #ffcccc;
+}
+
+.blog-list-row {
+    display: flex;
+    width: 100%;
+    align-items: center;
+}
+
+.blog-list-icon {
+    font-size: 1.2em;
+    margin-right: 15px;
+}
+
+.blog-list-title {
+    flex-grow: 1;
+    font-weight: bold;
+    font-size: 1.1em;
+    text-transform: uppercase;
+}
+
+.blog-list-date {
+    font-size: 0.8em;
+    color: #666;
+    font-family: monospace;
+}
+
+/* SINGLE POST VIEW (Detail) */
+.blog-title-large {
+    font-size: 2em;
+    color: var(--accent-color);
+    margin: 10px 0 30px 0;
+    text-transform: uppercase;
+    border-bottom: 1px solid #333;
+    padding-bottom: 15px;
+}
+
+.blog-content.full-content {
+    font-size: 1.1em;
+    line-height: 1.8;
+    color: var(--text-main);
+    white-space: pre-wrap; /* Formatiert Umbrüche korrekt */
+}
+
+/* EDITOR Styles (bleibt gleich) */
+.terminal-input {
+    width: 100%;
+    background: #111;
+    border: 1px solid #444;
+    color: var(--accent-color);
+    padding: 10px;
+    margin-bottom: 15px;
+    font-family: inherit;
+    font-size: 1em;
+}
+.terminal-input:focus {
+    border-color: var(--accent-color);
+    outline: none;
+}
+
+/* Password Input spezieller Style */
+#unlock-pass {
+    background: #000;
+    border: 1px solid #ff3333;
+    color: #ff3333;
+    font-weight: bold;
+    letter-spacing: 2px;
+}
+#unlock-pass:focus {
+    box-shadow: 0 0 10px rgba(255, 51, 51, 0.5);
+    outline: none;
 }

@@ -308,6 +308,8 @@ function switchChat(id) {
     });
     output.scrollTop = output.scrollHeight;
 
+    if (appState === 'BOOTING') return;
+
     // PROMPT UPDATE
     const type = myChats[id].type;
     const name = myChats[id].name;
@@ -521,7 +523,6 @@ if (inputField) {
 
     events.forEach(evt => {
         inputField.addEventListener(evt, (e) => {
-            // Performance: Bei 'mousemove' nur updaten, wenn die Maus gedrückt ist (Button 1)
             if (evt === 'mousemove' && e.buttons !== 1) return;
 
             // A) Auto-Grow
@@ -532,10 +533,16 @@ if (inputField) {
             // B) Visual Update
             updateMirror();
 
-            // C) History Reset (nur beim echten Tippen)
-            if (evt === 'input' && e.isTrusted) {
+            // C) History Reset (nur beim Chatten)
+            if (evt === 'input' && e.isTrusted && viewMode !== 'BLOG') {
                 historyIndex = commandHistory.length;
             }
+
+            // --- D) NEU: LIVE SEARCH FÜR BLOG ---
+            if (viewMode === 'BLOG' && evt === 'input') {
+                filterBlogPosts(inputField.value);
+            }
+            // ------------------------------------
         });
     });
 
@@ -546,6 +553,15 @@ if (inputField) {
 // ENTER & HISTORY LOGIK
 inputField.addEventListener('keydown', async (e) => {
     // SENDEN (Enter)
+
+    // --- NEU: BLOCKIEREN WENN IM BLOG MODUS ---
+    if (viewMode === 'BLOG') {
+        // Pfeiltasten für History erlauben wir hier nicht, Enter macht nichts (Suche ist live)
+        // Wir verhindern nur das Absenden an den Chat
+        if (e.key === 'Enter') e.preventDefault();
+        return;
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
         e.preventDefault();
         const val = inputField.value.trim();
@@ -2618,12 +2634,402 @@ function urlBase64ToUint8Array(base64String) {
     for (let i = 0; i < rawData.length; ++i) { outputArray[i] = rawData.charCodeAt(i); }
     return outputArray;
 }
+
 async function registerSw(key) {
     if('serviceWorker' in navigator) {
         const reg = await navigator.serviceWorker.register('/sw.js');
         const sub = await reg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: urlBase64ToUint8Array(key) });
         socket.emit('save_subscription', sub);
     }
+}
+
+// =============================================================================
+// BLOG / SYSTEM LOGS MODULE (MASTER-DETAIL VIEW)
+// =============================================================================
+
+let viewMode = 'CHAT'; // 'CHAT' oder 'BLOG'
+let activeBlogPostId = null; // ID des geöffneten Blogs (null = Liste)
+let blogCache = [];
+
+function toggleBlogView() {
+    if (viewMode === 'CHAT') {
+        viewMode = 'BLOG';
+        activeBlogPostId = null; // Immer mit der Liste starten
+
+        document.getElementById('btn-logs').textContent = '[ RETURN TO TERMINAL ]';
+        document.getElementById('btn-logs').classList.add('danger');
+
+        // Input auf Suche umschalten
+        input.placeholder = "TYPE TO SEARCH ARCHIVES...";
+        input.disabled = false;
+        input.value = '';
+        input.focus();
+
+        // Prompt ändern
+        promptSpan.setAttribute('data-prev-prompt', promptSpan.textContent);
+        promptSpan.textContent = 'SEARCH_QUERY>';
+        promptSpan.style.color = '#ffff00';
+
+        renderBlogView();
+        socket.emit('blog_list_req');
+    } else {
+        viewMode = 'CHAT';
+        document.getElementById('btn-logs').textContent = '[ SYSTEM LOGS ]';
+        document.getElementById('btn-logs').classList.remove('danger');
+
+        // Input zurücksetzen
+        input.placeholder = "";
+        input.value = '';
+        input.disabled = false;
+
+        // Prompt wiederherstellen
+        const oldPrompt = promptSpan.getAttribute('data-prev-prompt');
+        if (oldPrompt) promptSpan.textContent = oldPrompt;
+
+        if (appState === 'BOOTING') {
+            promptSpan.style.color = '#ff3333';
+        } else {
+            promptSpan.style.color = '#0f0';
+        }
+
+        switchChat(activeChatId);
+    }
+}
+
+// Server schickt Liste
+socket.on('blog_list_res', (list) => {
+    blogCache = list;
+    if (viewMode === 'BLOG') renderBlogView();
+});
+
+// Update Signal
+socket.on('blog_update_signal', () => {
+    if (viewMode === 'BLOG') socket.emit('blog_list_req');
+});
+
+// Hilfsfunktion: Suche im Cache
+function filterBlogPosts(query) {
+    // Wenn man sucht, muss man zwingend zurück zur Liste, sonst sieht man die Ergebnisse nicht
+    if (activeBlogPostId !== null && query.length > 0) {
+        activeBlogPostId = null;
+    }
+
+    if (!query) {
+        renderBlogView(blogCache);
+        return;
+    }
+
+    const term = query.toLowerCase();
+    const filtered = blogCache.filter(post => {
+        return post.title.toLowerCase().includes(term) ||
+            post.content.toLowerCase().includes(term) ||
+            (post.tags && post.tags.some(t => t.toLowerCase().includes(term)));
+    });
+
+    renderBlogView(filtered);
+}
+
+// Haupt-Render-Funktion (Behandelt LISTE und DETAIL)
+function renderBlogView(postsToRender = blogCache) {
+    output.innerHTML = '';
+
+    // --- HEADER IMMER ANZEIGEN ---
+    const header = document.createElement('div');
+    header.innerHTML = `
+        <div class="blog-header">
+            <h2 style="color:#fff; margin:0;">/// SYSTEM ARCHIVES ///</h2>
+            <div style="color:#888; font-size:0.8em;">ACCESS LEVEL: ${iamAdmin ? 'ADMINISTRATOR (WRITE ACCESS)' : 'GUEST (READ ONLY)'}</div>
+        </div>
+        <hr style="border-color:#333; margin: 15px 0;">
+    `;
+    output.appendChild(header);
+
+    // --- FALL A: EINZELANSICHT (DETAIL) ---
+    if (activeBlogPostId !== null) {
+        const post = blogCache.find(p => p.id === activeBlogPostId);
+
+        if (!post) {
+            activeBlogPostId = null;
+            renderBlogView();
+            return;
+        }
+
+        // --- SICHERHEITS-CHECK ---
+        // Wenn der Post geschützt ist UND wir keinen Inhalt haben (weil Server ihn zensiert hat)
+        if (post.isProtected && typeof post.content === 'undefined') {
+            const detailContainer = document.createElement('div');
+            detailContainer.className = 'blog-detail-view';
+            detailContainer.innerHTML = `
+                <div style="text-align:center; padding: 40px; border: 1px solid #ff3333; background: rgba(50,0,0,0.3);">
+                    <h1 style="color:#ff3333;">⚠️ ENCRYPTED DATA DETECTED ⚠️</h1>
+                    <p style="color:#fff;">This log entry is protected by a high-level encryption layer.</p>
+                    
+                    <div style="margin: 20px auto; max-width: 300px;">
+                        <input type="password" id="unlock-pass" class="terminal-input" placeholder="ENTER DECRYPTION KEY" style="text-align:center;">
+                        <button class="voice-btn" style="width:100%; border-color:#ff3333; color:#ff3333;" onclick="unlockPost('${post.id}')">[ DECRYPT ]</button>
+                    </div>
+                    
+                    <button class="voice-btn" onclick="closeBlogPost()">[ CANCEL ]</button>
+                </div>
+            `;
+            output.appendChild(detailContainer);
+            return;
+        }
+        // -------------------------
+
+        const detailContainer = document.createElement('div');
+        detailContainer.className = 'blog-detail-view';
+
+        const date = new Date(post.timestamp).toLocaleString();
+
+        // Admin Buttons für Detailansicht
+        let adminBtns = '';
+        if (iamAdmin) {
+            adminBtns = `
+                <div class="blog-actions" style="margin-top:10px;">
+                    <span onclick="showEditor('${post.id}')">[ EDIT ENTRY ]</span>
+                    <span onclick="deletePost('${post.id}')" style="color:#f00;">[ DELETE ENTRY ]</span>
+                </div>
+            `;
+        }
+
+        // ANHANG RENDERN?
+        let attachmentHtml = '';
+        if (post.attachment) {
+            const sizeKB = Math.round(post.attachment.size / 1024);
+            attachmentHtml = `
+                <div style="margin: 20px 0; padding: 10px; border: 1px dashed var(--accent-color); background: rgba(74, 246, 38, 0.05);">
+                    <div style="font-weight:bold; margin-bottom:5px;">>>> ATTACHED DATA PACKET FOUND:</div>
+                    <div style="color:#fff;">FILE: ${post.attachment.originalName} (${sizeKB} KB)</div>
+                    <div style="margin-top:10px;">
+                        <a href="${post.attachment.path}" download class="voice-btn" style="text-decoration:none; display:inline-block;">
+                            [ DOWNLOAD FILE ]
+                        </a>
+                    </div>
+                </div>
+            `;
+        }
+
+        detailContainer.innerHTML = `
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:20px;">
+                <div style="color:#666;">LOG_ID_${post.id.substr(0,4)} :: ${date}</div>
+                <button class="voice-btn" onclick="closeBlogPost()">[ < CLOSE LOG ]</button>
+            </div>
+
+            <h1 class="blog-title-large">${post.title}</h1>
+            
+            ${attachmentHtml}
+            
+            <div class="blog-content full-content">
+                ${formatContent(post.content)}
+            </div>
+
+            <div class="blog-tags" style="margin-top:30px; border-top:1px dashed #333; padding-top:10px;">
+                TAGS: ${post.tags.join(' // ')}
+            </div>
+            ${adminBtns}
+        `;
+
+        output.appendChild(detailContainer);
+        output.scrollTop = 0;
+        return; // HIER STOPPEN, DAMIT DIE LISTE NICHT DARUNTER ERSCHEINT
+    }
+
+
+    // --- FALL B: LISTENANSICHT (DASHBOARD) ---
+
+    // ADMIN CONTROLS (Nur in der Liste sichtbar)
+    if (iamAdmin) {
+        const controls = document.createElement('div');
+        controls.className = 'blog-admin-panel';
+        controls.innerHTML = `
+            <button class="voice-btn" onclick="showEditor()">[ + NEW ENTRY ]</button>
+        `;
+        output.appendChild(controls);
+    }
+
+    const listContainer = document.createElement('div');
+    listContainer.className = 'blog-list';
+
+    if (postsToRender.length === 0) {
+        listContainer.innerHTML = '<div style="padding:20px; color:#666; text-align:center;">>>> NO ENTRIES FOUND MATCHING QUERY.</div>';
+    } else {
+        postsToRender.forEach(post => {
+            const date = new Date(post.timestamp).toLocaleDateString(); // Nur Datum in der Liste
+            const importantClass = post.important ? 'important' : '';
+
+            // --- HIER DIE NEUE ICON LOGIK EINFÜGEN ---
+            let icon = '📄';
+            if (post.important) icon = '⚠️';
+            else if (post.isProtected || post.password) icon = '🔒'; // Schloss Icon
+            // -----------------------------------------
+
+            const entry = document.createElement('div');
+            entry.className = `blog-entry-item ${importantClass}`;
+
+            // Klick auf das Element öffnet den Post
+            entry.onclick = () => openBlogPost(post.id);
+
+            entry.innerHTML = `
+                <div class="blog-list-row">
+                    <span class="blog-list-icon">${icon}</span>
+                    <span class="blog-list-title">${post.title}</span>
+                    <span class="blog-list-date">${date}</span>
+                </div>
+            `;
+            listContainer.appendChild(entry);
+        });
+    }
+
+    output.appendChild(listContainer);
+    output.scrollTop = 0;
+}
+
+// --- NAVIGATION ACTIONS ---
+
+window.openBlogPost = (id) => {
+    activeBlogPostId = id;
+    renderBlogView(); // Neu rendern (springt in Fall A)
+};
+
+window.closeBlogPost = () => {
+    activeBlogPostId = null;
+    renderBlogView(); // Neu rendern (springt in Fall B)
+};
+
+// Editor und Save Funktionen bleiben gleich...
+window.showEditor = (editId = null) => {
+    let post = { title: '', content: '', tags: [], important: false, attachment: null, password: '' }; // Password init    let attachmentInfo = '';
+
+    if (editId) {
+        post = blogCache.find(p => p.id === editId);
+        if (post.attachment) {
+            attachmentInfo = `<div style="color:#0f0; font-size:0.8em; margin-top:5px;">[ CURRENT FILE: ${post.attachment.originalName} ]</div>`;
+        }
+    }
+
+    output.innerHTML = '';
+
+    const editor = document.createElement('div');
+    editor.className = 'blog-editor';
+    editor.innerHTML = `
+        <h3 style="color:#0f0;">>> COMPOSING LOG ENTRY...</h3>
+        
+        <label>SUBJECT / TITLE:</label>
+        <input type="text" id="edit-title" class="terminal-input" value="${post.title}" placeholder="SYSTEM UPDATE...">
+        
+        <label>ENCRYPTION KEY (LEAVE EMPTY FOR PUBLIC):</label>
+        <input type="text" id="edit-password" class="terminal-input" value="${post.password || ''}" placeholder="OPTIONAL PASSWORD">
+        
+        <label>DATA CONTENT (MARKDOWN SUPPORTED):</label>
+        <textarea id="edit-content" class="terminal-input" style="height:200px;">${post.content || ''}</textarea>
+        
+        <label>TAGS (COMMA SEPARATED):</label>
+        <input type="text" id="edit-tags" class="terminal-input" value="${post.tags.join(', ')}">
+        
+        <label>ATTACH FILE (OPTIONAL - MAX 5MB):</label>
+        <input type="file" id="edit-file" class="terminal-input" style="padding:5px;">
+        ${attachmentInfo}
+        <div style="margin: 15px 0;">
+            <input type="checkbox" id="edit-broadcast" ${post.important ? 'checked' : ''}>
+            <label for="edit-broadcast" style="color:#f00; font-weight:bold;">INITIATE NETWORK BROADCAST (ALERT)</label>
+        </div>
+
+        <div style="margin-top: 20px;">
+            <button class="voice-btn" onclick="savePost('${editId || ''}')">[ COMMIT DATA ]</button>
+            <button class="voice-btn danger" onclick="renderBlogView()">[ CANCEL ]</button>
+        </div>
+    `;
+    output.appendChild(editor);
+};
+
+window.savePost = (id) => {
+    const title = document.getElementById('edit-title').value;
+    const content = document.getElementById('edit-content').value;
+    const tags = document.getElementById('edit-tags').value.split(',').map(t => t.trim()).filter(t => t);
+    const broadcast = document.getElementById('edit-broadcast').checked;
+    const fileInput = document.getElementById('edit-file');
+    const password = document.getElementById('edit-password').value.trim();
+
+    if (!title || !content) {
+        alert("ERROR: EMPTY DATA FIELDS.");
+        return;
+    }
+
+    // Funktion zum Senden (wird unten aufgerufen)
+    const sendData = (fileObj = null) => {
+        // Altes Attachment behalten, wenn wir editieren und nix neues hochladen?
+        let existingAttachment = null;
+        if (id && !fileObj) {
+            const oldPost = blogCache.find(p => p.id === id);
+            if (oldPost) existingAttachment = oldPost.attachment;
+        }
+
+        socket.emit('blog_post_req', {
+            id: id || null,
+            title, content, tags, broadcast,
+            file: fileObj, // Das neue File (oder null)
+            existingAttachment: existingAttachment,
+            password: password
+        });
+        activeBlogPostId = null;
+    };
+
+    // Haben wir eine neue Datei ausgewählt?
+    if (fileInput.files.length > 0) {
+        const file = fileInput.files[0];
+
+        // Größen-Check (z.B. 5MB Limit um Socket nicht zu verstopfen)
+        if (file.size > 5 * 1024 * 1024) {
+            alert("ERROR: FILE TOO LARGE (MAX 5MB).");
+            return;
+        }
+
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            // Wir senden Name, Größe und den rohen Buffer
+            sendData({
+                name: file.name,
+                size: file.size,
+                buffer: evt.target.result // Das ArrayBuffer
+            });
+        };
+        reader.readAsArrayBuffer(file); // WICHTIG: Als Buffer lesen
+    } else {
+        // Keine Datei -> Einfach so speichern
+        sendData(null);
+    }
+};
+
+window.unlockPost = (id) => {
+    const pwd = document.getElementById('unlock-pass').value;
+    socket.emit('blog_unlock_req', { id: id, password: pwd });
+};
+
+// Wenn der Server das OK gibt
+socket.on('blog_unlock_success', (fullPost) => {
+    // Wir updaten unseren lokalen Cache mit den entschlüsselten Daten
+    const idx = blogCache.findIndex(p => p.id === fullPost.id);
+    if (idx >= 0) {
+        blogCache[idx] = fullPost; // Jetzt haben wir content & attachment!
+        renderBlogView(); // Neu rendern -> Jetzt springt er in die normale Ansicht
+    }
+});
+
+window.deletePost = (id) => {
+    if (confirm("CONFIRM DATA PURGE? THIS CANNOT BE UNDONE.")) {
+        socket.emit('blog_delete_req', id);
+        activeBlogPostId = null; // Falls wir gerade drin waren
+    }
+};
+
+function formatContent(text) {
+    let html = text
+        .replace(/\n/g, '<br>')
+        .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+        .replace(/\*(.*?)\*/g, '<i>$1</i>')
+        .replace(/`(.*?)`/g, '<code style="background:#222; padding:2px;">$1</code>');
+    return html;
 }
 
 // --- INIT ---
