@@ -66,6 +66,8 @@ let currentVoiceTarget = null; // Speichert den Key des aktuellen Gesprächspart
 
 let fileShareWindow = null;
 
+let institutionStyles = {}; // Speichert: { UserKey: { color: '#...', tag: '...' } }
+
 // Hilfsfunktion für den Accept-Button
 window.triggerAccept = (key) => {
     // Simuliert die Eingabe von /accept [KEY]
@@ -91,18 +93,41 @@ window.triggerLinkJoin = (linkId) => {
     socket.emit('group_use_link_req', linkId);
 };
 
-// Hilfsfunktion: Klick auf Namen -> Server fragen wer das ist
+// A) FÜR ADMINS / OWNER / MODS (Reveal + Copy)
 window.handleNameClick = (key) => {
-    // 1. Visuelles Feedback
+    // 1. Visuelles Feedback (Input Fokus)
     const inputField = document.getElementById('command-input');
     inputField.focus();
 
-    // 2. ID schonmal ins Input Feld (praktisch zum Kicken)
-    if (inputField.value === '') inputField.value = key;
-    else if (!inputField.value.includes(key)) inputField.value += ' ' + key;
+    // --- NEU: Start-Text für den Identity Screen ---
+    inputField.placeholder = "Type your identity...";
+// -----------------------------------------------
 
-    // 3. Server Anfrage: Wer ist das?
+    // 2. ID in die Zwischenablage kopieren (statt ins Input Feld!)
+    navigator.clipboard.writeText(key).then(() => {
+        // Kleines Feedback im Chat (nur lokal)
+        printLine(`(i) COPIED ID TO CLIPBOARD: ${key}`, 'system-msg');
+    }).catch(err => {
+        console.error('Copy failed', err);
+    });
+
+    // 3. Server Anfrage: Wer ist das? (Nur für Berechtigte)
     socket.emit('ghost_reveal_req', key);
+};
+
+// B) FÜR NORMALE USER (Nur Copy, kein Reveal)
+window.handleSimpleCopy = (key) => {
+    // 1. Fokus
+    document.getElementById('command-input').focus();
+
+    // 2. Nur kopieren!
+    navigator.clipboard.writeText(key).then(() => {
+        printLine(`(i) COPIED ID: ${key}`, 'system-msg');
+    }).catch(err => {
+        console.error('Copy failed', err);
+    });
+
+    // KEIN socket.emit() -> Kein "Access Denied" Fehler mehr!
 };
 
 // Wenn dieser Tab geschlossen oder neu geladen wird...
@@ -134,35 +159,52 @@ function openFileSystem() {
 function getDynamicName(name, key) {
     if (!key) return name;
 
-    // 1. Kontext prüfen: Wo sind wir gerade?
+    // --- 1. ADMIN / MOD / OWNER CHECK (Darf Reveal nutzen) ---
     const currentChat = myChats[activeChatId];
-
-    // 2. Berechtigung prüfen
     let canUnmask = false;
 
     if (iamAdmin) {
-        canUnmask = true; // Admin darf alles
+        canUnmask = true;
     }
     else if (currentChat && currentChat.type === 'group') {
-        // In Gruppen: Nur Owner und Mods dürfen IDs sehen/klicken
         if (currentChat.role === 'OWNER' || currentChat.role === 'MOD' || currentChat.role === 'ADMIN') {
             canUnmask = true;
         }
     }
-    // (In Public Chats darf nur der Admin)
 
-    // 3. Ausgabe generieren
-    if (canUnmask) {
-        // ERST Variablen definieren
-        const title = `ADMIN TOOL: Click to reveal identity & copy ID`;
-        const action = `window.handleNameClick('${key}')`;
+    // --- 2. STYLE CHECK (Institutionen) ---
+    const instStyle = institutionStyles[key];
+    let customStyle = '';
+    let title = "Click to copy ID"; // Standard Tooltip
 
-        // DANN return (mit der neuen CSS-Klasse, ohne style-Attribut)
-        return `<span class="dynamic-name dynamic-name-admin" data-key="${key}" onclick="${action}" title="${title}">${name}</span>`;
-    } else {
-        // Sichere Version für Member (Nur Text, keine ID sichtbar im Tooltip)
-        return `<span class="dynamic-name" data-key="${key}">${name}</span>`;
+    if (instStyle) {
+        // Neon-Style für Institutionen
+        customStyle = `color: ${instStyle.color}; text-shadow: 0 0 5px ${instStyle.color}; font-weight: bold;`;
+        title = "OFFICIAL INSTITUTION ACCOUNT";
     }
+
+    // --- 3. LOGIK ENTSCHEIDUNG ---
+
+    // FALL A: Berechtigte User (Admin/Mod)
+    if (canUnmask) {
+        const adminTitle = "ADMIN TOOL: Reveal Identity & Copy ID";
+        const action = `window.handleNameClick('${key}')`; // Nutzt die Reveal-Funktion
+        // Fügt Admin-Klasse hinzu für evtl. CSS, plus Custom Style falls Institution
+        return `<span class="dynamic-name dynamic-name-admin" style="${customStyle}" data-key="${key}" onclick="${action}" title="${adminTitle}">${name}</span>`;
+    }
+
+    // FALL B: Normale User sieht GHOST ("Anonymous")
+    // WICHTIG: Kein Klick-Handler! ID darf nicht kopiert werden.
+    if (name === 'Anonymous') {
+        return `<span class="dynamic-name" style="${customStyle}; cursor: default;" data-key="${key}" title="Encrypted Identity">${name}</span>`;
+    }
+
+    // FALL C: Normale User sieht normalen User oder Institution
+    // Darf ID kopieren, aber nicht revealan (handleSimpleCopy)
+    const action = `window.handleSimpleCopy('${key}')`;
+    const style = customStyle || "cursor: pointer;"; // Pointer nur wenn klickbar
+
+    return `<span class="dynamic-name" style="${style}" data-key="${key}" onclick="${action}" title="${title}">${name}</span>`;
 }
 
 // =============================================================================
@@ -299,48 +341,93 @@ function registerChat(id, name, type, cryptoKey = null, role = 'MEMBER') {
 }
 
 function switchChat(id) {
-    if (!myChats[id]) return;
+
+    if (!myUsername) {
+        // Fokus zurück in das Namens-Feld zwingen
+        document.getElementById('command-input').focus();
+        return; // ABBRUCH: Funktion hier beenden!
+    }
+    // -----------------------------------------------
+
+    // 1. Definition der Variable 'chat' (WICHTIG für den Fix)
+    const chat = myChats[id];
+
+    // Sicherheits-Check: Abbruch, wenn Chat nicht existiert (außer es ist LOCAL)
+    if (id !== 'LOCAL' && !chat) return;
+
+    // 2. State setzen
     activeChatId = id;
-    myChats[id].unread = 0;
-    renderChatList();
+    viewMode = 'CHAT'; // Zwingt Ansicht zurück auf Chat (falls man aus Dashboard kommt)
 
-    // UI Reset
-    output.innerHTML = '';
-    myChats[id].history.forEach(html => {
-        const div = document.createElement('div');
-        div.innerHTML = html;
-        output.appendChild(div);
-    });
-    output.scrollTop = output.scrollHeight;
+    if (chat) chat.unread = 0;
 
-    if (appState === 'BOOTING') return;
+    // 3. Input Feld zurücksetzen
+    const inputField = document.getElementById('command-input');
+    inputField.value = "";
+    inputField.disabled = false;
+    inputField.focus();
 
-    // PROMPT UPDATE
-    const type = myChats[id].type;
-    const name = myChats[id].name;
 
-    if (type === 'system') promptSpan.textContent = '>';
-    else if (type === 'private') promptSpan.textContent = `SECURE/${name}>`;
+    // 4. Logik für Placeholder und Prompts
 
-    // DEIN WUNSCH: group/(gruppenname)>
-    else if (type === 'group') promptSpan.textContent = `group/${name}>`;
+    // FALL A: HQ INBOX
+    if (id === 'HQ_INBOX') {
+        inputField.placeholder = "Search Secure Inbox...";
 
-    else if (type === 'pub') promptSpan.textContent = `PUB/${id}>`;
-
-    // State Update für Voice
-    if (type === 'private') {
-        appState = 'CHATTING';
-        updateVoiceUI('idle');
-    } else if (type === 'group') {
-        appState = 'GROUP_CHATTING';
-        updateVoiceUI('idle');
-    } else if (type === 'pub') {
-        appState = 'PUB_CHATTING';
-        updateVoiceUI('idle');
-    } else {
+        if (window.isHqLoggedIn) {
+            promptSpan.textContent = 'HQ/SEARCH>';
+            promptSpan.className = 'prompt-error';
+        }
+    }
+    // FALL B: LOCAL SHELL
+    else if (id === 'LOCAL') {
+        inputField.placeholder = "Enter command...";
+        promptSpan.textContent = '>';
+        promptSpan.className = 'prompt-default';
         appState = 'IDLE';
+    }
+    // FALL C: NORMALE CHATS (Variable 'chat' ist hier sicher vorhanden)
+    else if (chat) {
+        const pName = chat.name || chat.id;
+        promptSpan.className = 'prompt-default';
+
+        if (chat.type === 'group') {
+            inputField.placeholder = `Message #${pName}...`;
+            promptSpan.textContent = `group/${pName}>`;
+            appState = 'GROUP_CHATTING';
+        }
+        else if (chat.type === 'pub') {
+            inputField.placeholder = `Message Sector ${chat.id}...`;
+            promptSpan.textContent = `PUB/${chat.id}>`;
+            appState = 'PUB_CHATTING';
+        }
+        else {
+            // Private
+            inputField.placeholder = `Message ${pName}...`;
+            promptSpan.textContent = `SECURE/${pName}>`;
+            appState = 'CHATTING';
+        }
+
         updateVoiceUI('idle');
     }
+
+    // 5. Rendering
+    renderChatList();
+
+    output.innerHTML = '';
+
+    // History laden (Fallback für LOCAL, falls kein Chat-Objekt existiert)
+    const historySource = chat ? chat.history : (myChats['LOCAL'] ? myChats['LOCAL'].history : []);
+
+    if (historySource) {
+        historySource.forEach(html => {
+            const div = document.createElement('div');
+            div.innerHTML = html;
+            output.appendChild(div);
+        });
+    }
+
+    output.scrollTop = output.scrollHeight;
 }
 
 // Chat komplett aus dem Speicher löschen (Mit Voice-Cleanup)
@@ -418,7 +505,7 @@ function renderChatList() {
     const buckets = { local: [], private: [], group: [], pub: [] };
 
     allChats.forEach(chat => {
-        if (chat.id === 'LOCAL') buckets.local.push(chat);
+        if (chat.id === 'LOCAL' || chat.type === 'system') buckets.local.push(chat);
         else if (chat.type === 'private') buckets.private.push(chat);
         else if (chat.type === 'group') buckets.group.push(chat);
         else if (chat.type === 'pub') buckets.pub.push(chat);
@@ -532,6 +619,7 @@ async function runBootSequence() {
 
     promptSpan.textContent = 'IDENTITY>';
     promptSpan.className = 'prompt-error';
+    document.getElementById('command-input').placeholder = "Type your identity...";
     input.disabled = false;
     input.focus();
     renderChatList(); // Sidebar initialisieren
@@ -715,6 +803,8 @@ async function handleInput(text) {
         myUsername = text;
         myKeyPair = await generateKeyPair();
         socket.emit('register', myUsername);
+
+        switchChat('LOCAL');
 
         printLine('Authenticating...', 'system-msg');
 
@@ -1288,50 +1378,42 @@ async function handleInput(text) {
         }
         // --- SECURE DROP (INFORMANT) ---
         else if (cmd === '/tip') {
-            const msg = args.slice(1).join(' ');
-            if (!msg) {
-                printLine('USAGE: /tip [CONFIDENTIAL_MESSAGE]', 'error-msg');
+            // Format: /tip [TARGET_ID] [MESSAGE]
+            const target = args[1]; // z.B. MI6
+            const msg = args.slice(2).join(' ');
+
+            if (!target || !msg) {
+                printLine('USAGE: /tip [MI6|CIA] [MESSAGE]', 'error-msg');
                 return;
             }
 
-            printLine('Establishing secure uplink to HQ...', 'system-msg');
-            // 1. Key anfordern
-            socket.emit('hq_get_key_req');
+            printLine(`Establishing secure uplink to ${target.toUpperCase()}...`, 'system-msg');
 
-            // Wir speichern die Nachricht kurz zwischen, bis der Key da ist
-            window.pendingTip = msg;
+            // Key anfordern
+            socket.emit('hq_get_key_req', target.toUpperCase());
+
+            // Merken was wir senden wollten
+            window.pendingTip = { target: target.toUpperCase(), msg: msg };
         }
 
         // --- HQ LOGIN & DASHBOARD ---
         else if (cmd === '/hq') {
             const sub = args[1];
-            if (sub === 'setup') {
-                // Generiert Keys und speichert sie lokal (Passwort-geschützt wäre besser, aber wir machen es simpel für den Start)
-                printLine('Generating RSA-2048 Identity Keys...', 'system-msg');
-                const keyPair = await generateRsaKeyPair();
-
-                // Speichern im IndexedDB oder LocalStorage (Achtung: Unsicher im Browser, aber für Demo ok)
-                // Besser: Exportieren und User speichern lassen.
-                // Hier vereinfacht: Wir speichern den Private Key im RAM solange der Tab offen ist.
-                window.hqPrivateKey = keyPair.privateKey;
-                window.hqPublicKey = await exportPublicKey(keyPair.publicKey); // Nutzung der existierenden export funktion (spki)
-
-                printLine('IDENTITY GENERATED. READY TO LOGIN.', 'success-msg');
-            }
-            else if (sub === 'login') {
-                const password = args[2];
-                if (!window.hqPublicKey) {
-                    printLine('ERROR: No identity found. Run "/hq setup" first.', 'error-msg');
-                    return;
-                }
-                socket.emit('hq_login', { password: password, publicKey: window.hqPublicKey });
-            }
-            else if (sub === 'inbox') {
+            if (sub === 'broadcast') {
+                // Prüfen ob eingeloggt
                 if (!window.isHqLoggedIn) {
-                    printLine('ACCESS DENIED.', 'error-msg');
+                    printLine('ACCESS DENIED. Log in first.', 'error-msg');
                     return;
                 }
-                toggleInboxView();
+
+                // Nachricht extrahieren (alles nach "/hq broadcast")
+                const msg = args.slice(2).join(' ');
+                if (!msg) {
+                    printLine('USAGE: /hq broadcast [MESSAGE]', 'error-msg');
+                    return;
+                }
+
+                socket.emit('hq_broadcast_req', msg);
             }
         }
      else if (cmd === '/help') {
@@ -1348,6 +1430,10 @@ async function handleInput(text) {
     }
 
     // --- MESSAGING (MIT ROTATION & COUNTER) ---
+    if (activeChatId === 'HQ_INBOX') {
+        return; // Nichts tun (Enter wird ignoriert)
+    }
+
     const currentChat = myChats[activeChatId];
     if (!currentChat || activeChatId === 'LOCAL') {
         printLine('SYSTEM: Local shell. Connect first.', 'error-msg');
@@ -1512,47 +1598,93 @@ socket.on('incoming_request', (data) => {
     }
 });
 
-// GHOST STATUS UPDATE (Deep Fix für History)
+// GHOST STATUS UPDATE (Deep Fix: Attribute & Klick-Schutz)
 socket.on('user_ghost_update', (data) => {
     // data: { key, username, isGhost }
-
     const newDisplayName = data.isGhost ? 'Anonymous' : data.username;
 
-    // 1. LIVE DOM UPDATE (Für das, was man gerade sieht)
-    const elements = document.querySelectorAll(`.dynamic-name[data-key="${data.key}"]`);
-    elements.forEach(el => {
-        el.textContent = newDisplayName;
-        el.style.opacity = '0.5';
-        setTimeout(() => el.style.opacity = '1', 300);
+    // Hilfsfunktion: Baut den öffnenden <span ...> Tag passend zum Chat-Kontext neu
+    // (Entscheidet ob klickbar oder nicht)
+    const getNewTagHtml = (chatId) => {
+        // 1. Berechtigung prüfen (Darf ich in DIESEM Chat enttarnen?)
+        let canUnmask = false;
+        if (iamAdmin) canUnmask = true;
+        else {
+            const c = myChats[chatId];
+            if (c && c.type === 'group' && ['OWNER', 'MOD', 'ADMIN'].includes(c.role)) {
+                canUnmask = true;
+            }
+        }
+
+        // 2. Style prüfen (Institutionen)
+        const instStyle = institutionStyles[data.key];
+        let customStyle = '';
+        let title = "Click to copy ID";
+
+        if (instStyle) {
+            customStyle = `color: ${instStyle.color}; text-shadow: 0 0 5px ${instStyle.color}; font-weight: bold;`;
+            title = "OFFICIAL INSTITUTION ACCOUNT";
+        }
+
+        // 3. Tag bauen
+
+        // FALL A: Berechtigte (Admin/Owner) -> Immer klickbar (Reveal)
+        if (canUnmask) {
+            const action = `window.handleNameClick('${data.key}')`;
+            return `<span class="dynamic-name dynamic-name-admin" style="${customStyle}" data-key="${data.key}" onclick="${action}" title="ADMIN: Reveal">`;
+        }
+
+        // FALL B: Normale User + GHOST -> NICHT KLICKBAR
+        if (newDisplayName === 'Anonymous') {
+            // WICHTIG: Kein onclick, Cursor default
+            return `<span class="dynamic-name" style="${customStyle}; cursor: default;" data-key="${data.key}" title="Encrypted Identity">`;
+        }
+
+        // FALL C: Normale User + Sichtbar -> Klickbar (Copy Only)
+        const action = `window.handleSimpleCopy('${data.key}')`;
+        const style = customStyle || "cursor: pointer;";
+        return `<span class="dynamic-name" style="${style}" data-key="${data.key}" onclick="${action}" title="${title}">`;
+    };
+
+    // 1. LIVE DOM UPDATE (Nur im aktuellen Chat sichtbar)
+    const visibleElements = document.querySelectorAll(`.dynamic-name[data-key="${data.key}"]`);
+    if (visibleElements.length > 0) {
+        // Wir holen den Tag passend zum aktuellen Chat (activeChatId)
+        const newOpenTag = getNewTagHtml(activeChatId);
+
+        visibleElements.forEach(el => {
+            // WICHTIG: Wir ersetzen das ganze Element (outerHTML), damit Attribute wie onclick verschwinden!
+            el.outerHTML = `${newOpenTag}${newDisplayName}</span>`;
+        });
+    }
+
+    // 2. HISTORY SPEICHER UPDATE (Für alle Chats im Hintergrund)
+    Object.values(myChats).forEach(c => {
+        if (c.history && c.history.length > 0) {
+            // Tag passend zum jeweiligen Chat Kontext generieren
+            const newTagForChat = getNewTagHtml(c.id);
+
+            c.history = c.history.map(line => {
+                // Regex sucht den ganzen Span: (<span ...>)(Inhalt)(</span>)
+                const regex = new RegExp(`(<span [^>]*data-key="${data.key}"[^>]*>)(.*?)(</span>)`, 'g');
+
+                return line.replace(regex, (match, oldOpen, content, close) => {
+                    // Wir tauschen den Öffnungs-Tag (Attribute) UND den Inhalt (Name) aus
+                    return `${newTagForChat}${newDisplayName}${close}`;
+                });
+            });
+        }
     });
 
-    // 2. SIDEBAR UPDATE (Für Private Chats)
+    // 3. Sidebar Update (Falls privater Chat)
     const chat = myChats[data.key];
     if (chat && chat.type === 'private') {
         chat.name = newDisplayName;
         renderChatList();
-
-        // Wenn der Chat offen ist, auch den Prompt oben anpassen
         if (activeChatId === data.key) {
             promptSpan.textContent = `SECURE/${newDisplayName}>`;
         }
     }
-
-    // 3. HISTORY SPEICHER UPDATE (WICHTIG!)
-    // Wir müssen das gespeicherte HTML in ALLEN Chats aktualisieren,
-    // sonst wird beim Tab-Wechsel der alte Name wieder geladen.
-    Object.values(myChats).forEach(c => {
-        if (c.history && c.history.length > 0) {
-            c.history = c.history.map(line => {
-                // Wir suchen nach dem Span mit diesem Key und ersetzen den Inhalt
-                // Regex: Finde <span ... data-key="DER_KEY">ALTE_NAMEN</span>
-                const regex = new RegExp(`(<span class="dynamic-name" data-key="${data.key}">)(.*?)(</span>)`, 'g');
-
-                // Ersetze den inneren Teil (Gruppe 2) durch den neuen Namen
-                return line.replace(regex, `$1${newDisplayName}$3`);
-            });
-        }
-    });
 });
 
 // GHOST SCANNER ERGEBNIS (Universal)
@@ -1605,35 +1737,113 @@ socket.on('ghost_reveal_result', (data) => {
     // Optional: Automatisch Input füllen hatten wir schon im Klick-Handler gemacht.
 });
 
-// 4. CHAT START (Fixed Safety Number Sync)
+// INSTITUTION STATUS UPDATE (Farbe & Name & Rang-Erhaltung)
+socket.on('user_institution_update', (data) => {
+    // data: { key, username, tag, color }
+
+    // 1. Im Style-Cache speichern
+    institutionStyles[data.key] = {
+        tag: data.tag,
+        color: data.color
+    };
+
+    // Der neue Style für Institutionen
+    const newStyle = `color: ${data.color}; text-shadow: 0 0 5px ${data.color}; font-weight: bold; cursor: pointer;`;
+
+    // Hilfsfunktion: Baut den neuen Text und behält Ränge bei
+    const getPreservedContent = (oldContent) => {
+        // Prüfen, ob ein Rang davor steht (z.B. "[OWNER] ", "[MOD] ", "[ADMIN] ")
+        const roleMatch = oldContent.match(/^\[(OWNER|MOD|ADMIN)\]\s*/);
+        const prefix = roleMatch ? roleMatch[0] : '';
+
+        // Neuer Inhalt = Alter Rang + Neuer Institutions-Name
+        return prefix + data.username;
+    };
+
+    // 2. LIVE DOM UPDATE (Was du gerade siehst)
+    const elements = document.querySelectorAll(`.dynamic-name[data-key="${data.key}"]`);
+    elements.forEach(el => {
+        const newText = getPreservedContent(el.textContent);
+        el.innerHTML = newText;
+        el.style.cssText = newStyle; // Wendet den Neon-Style an
+    });
+
+    // 3. HISTORY SPEICHER UPDATE (Damit es beim Tab-Wechsel bleibt)
+    Object.values(myChats).forEach(c => {
+        if (c.history && c.history.length > 0) {
+            c.history = c.history.map(line => {
+                // Regex sucht nach dem Span mit der ID
+                const regex = new RegExp(`(<span class="dynamic-name"[^>]*data-key="${data.key}"[^>]*>)(.*?)(</span>)`, 'g');
+
+                return line.replace(regex, (match, openTag, content, closeTag) => {
+                    const newText = getPreservedContent(content);
+
+                    // Wir bauen den Tag neu, um den Style und onClick Attribute sicher hinzuzufügen
+                    const action = `window.handleNameClick('${data.key}')`;
+                    const title = "OFFICIAL INSTITUTION ACCOUNT";
+                    const newOpenTag = `<span class="dynamic-name" style="${newStyle}" data-key="${data.key}" onclick="${action}" title="${title}">`;
+
+                    return `${newOpenTag}${newText}${closeTag}`;
+                });
+            });
+        }
+    });
+
+    // 4. Sidebar Update (Falls Chat offen)
+    const chat = myChats[data.key];
+    if (chat) {
+        chat.name = data.username;
+        renderChatList();
+
+        if (activeChatId === data.key) {
+            promptSpan.textContent = `SECURE/${data.username}>`;
+        }
+    }
+});
+
+// 4. CHAT START (Final HQ Fix)
 socket.on('chat_start', async (data) => {
     const chatId = data.partnerKey || data.partner;
-
     let finalKey = null;
 
     // Variablen für Safety Number
     let myCorrectPubKeyString = null;
     let partnerPubKeyString = null;
 
-    // FALL A: Wir sind der Initiator (haben /connect gemacht)
+    // FALL A: Wir sind der Initiator
     if (data.publicKey) {
         try {
-            // Wir holen das gespeicherte Objekt aus Schritt 1
-            const storedData = outgoingConnects[chatId];
-
             let usedPrivateKey;
 
-            if (storedData) {
-                // Wir haben einen temporären Schlüssel benutzt!
-                usedPrivateKey = storedData.privateKey;
-                myCorrectPubKeyString = storedData.publicKeyString; // <--- DAS IST DER FIX
+            // --- DER FIX: ZUERST DEN GLOBALEN HQ KEY PRÜFEN ---
+            if (window.hqPendingKeyPair) {
+                console.log("CLIENT DEBUG: Using HQ Pending Key!");
+                usedPrivateKey = window.hqPendingKeyPair.privateKey;
+                myCorrectPubKeyString = await exportPublicKey(window.hqPendingKeyPair.publicKey);
 
-                // Aufräumen
-                delete outgoingConnects[chatId];
-            } else {
-                // Fallback (sollte nicht passieren, aber zur Sicherheit)
-                usedPrivateKey = myKeyPair.privateKey;
-                myCorrectPubKeyString = await exportPublicKey(myKeyPair.publicKey);
+                // WICHTIG: Sofort löschen, damit er nicht für andere Chats benutzt wird
+                window.hqPendingKeyPair = null;
+            }
+                // --------------------------------------------------
+
+            // Falls kein HQ Key da war, suchen wir normal weiter (P2P Logik)
+            else {
+                // Versuche Key unter ChatID oder PartnerID zu finden
+                let storedData = outgoingConnects[chatId];
+                if (!storedData && data.partner) {
+                    storedData = outgoingConnects[data.partner];
+                    if (storedData) delete outgoingConnects[data.partner];
+                }
+
+                if (storedData) {
+                    usedPrivateKey = storedData.privateKey;
+                    myCorrectPubKeyString = storedData.publicKeyString;
+                    if (outgoingConnects[chatId]) delete outgoingConnects[chatId];
+                } else {
+                    // Fallback (Notlösung)
+                    usedPrivateKey = myKeyPair.privateKey;
+                    myCorrectPubKeyString = await exportPublicKey(myKeyPair.publicKey);
+                }
             }
 
             finalKey = await deriveSecretKey(usedPrivateKey, data.publicKey);
@@ -1641,16 +1851,11 @@ socket.on('chat_start', async (data) => {
 
         } catch(e) { console.error("Key Error:", e); }
     }
-    // FALL B: Wir sind der Akzeptierer (haben /accept gemacht)
+    // FALL B: Wir sind der Akzeptierer
     else if (tempDerivedKey) {
         finalKey = tempDerivedKey;
         tempDerivedKey = null;
-
-        // Als Akzeptierer haben wir unseren NEUEN globalen Key gesendet.
-        // Also ist myKeyPair hier korrekt.
         myCorrectPubKeyString = await exportPublicKey(myKeyPair.publicKey);
-
-        // Den Key des Partners haben wir uns beim Accept gemerkt
         partnerPubKeyString = window.tempPartnerPubKeyString;
     }
 
@@ -1658,15 +1863,19 @@ socket.on('chat_start', async (data) => {
         registerChat(chatId, data.partner, 'private', finalKey);
 
         const chat = myChats[chatId];
-
-        // --- WICHTIG: Die korrekten Strings speichern ---
-        chat.myKeyPair = myKeyPair; // Referenz behalten wir (fürs Rotieren)
-        chat.myPublicKeyString = myCorrectPubKeyString; // <--- FIX: Der tatsächlich gesendete Key
+        chat.myKeyPair = myKeyPair;
+        chat.myPublicKeyString = myCorrectPubKeyString;
         chat.partnerPublicKeyString = partnerPubKeyString || "UNKNOWN";
         chat.msgCount = 0;
-        // ------------------------------------------------
 
-        switchChat(chatId);
+        // Automatisch wechseln wenn wir in der Inbox sind
+        if (activeChatId === 'HQ_INBOX') {
+            switchChat(chatId);
+        } else {
+            // Notification oder Wechsel
+            switchChat(chatId);
+        }
+
         printToChat(chatId, '----------------------------------------', 'system-msg');
         printToChat(chatId, `>>> SECURE CHANNEL ESTABLISHED WITH: ${getDynamicName(data.partner, chatId)}`, 'system-msg');
         printToChat(chatId, '----------------------------------------', 'system-msg');
@@ -2661,16 +2870,21 @@ socket.on('voice_terminated', () => {
 // --- HQ EVENTS ---
 
 // 1. Key empfangen (Informant) -> Verschlüsseln & Senden
-socket.on('hq_key_res', async (pubKey) => {
-    if (window.pendingTip) {
-        printLine('Uplink secured. Encrypting payload...', 'system-msg');
-
+// Key empfangen -> Verschlüsseln -> Senden
+socket.on('hq_key_res', async (data) => {
+    // data: { targetId, key }
+    if (window.pendingTip && window.pendingTip.target === data.targetId) {
         try {
-            const encrypted = await encryptForHq(window.pendingTip, pubKey);
-            socket.emit('hq_send_tip', encrypted);
-            window.pendingTip = null; // Clear
+            const encrypted = await encryptForHq(window.pendingTip.msg, data.key);
+
+            socket.emit('hq_send_tip', {
+                targetId: data.targetId,
+                content: encrypted
+            });
+
+            window.pendingTip = null;
         } catch (e) {
-            printLine('ENCRYPTION ERROR: ' + e.message, 'error-msg');
+            printLine('ENCRYPTION ERROR.', 'error-msg');
         }
     }
 });
@@ -2715,25 +2929,194 @@ socket.on('auth_failed', (reason) => {
     printLine('Local terminal session has been flagged.', 'system-msg');
 });
 
-// 2. HQ Login Erfolg
-socket.on('hq_login_success', (data) => {
-    window.isHqLoggedIn = true;
-    myUsername = data.username; // Namen überschreiben
+// AUTH SUCCESS (HQ)
+socket.on('hq_login_success', async (data) => {
+    // data: { id, username, privateKey, ... }
 
+    window.isHqLoggedIn = true;
+
+    window.hqSessionStart = Date.now();
+    // ------------------------------------
+
+    // 1. Private Key speichern (fürs Entschlüsseln)
+    try {
+        window.hqPrivateKey = await window.crypto.subtle.importKey(
+            "pkcs8",
+            base64ToArrayBuffer(data.privateKey),
+            { name: "RSA-OAEP", hash: "SHA-256" },
+            true,
+            ["decrypt"]
+        );
+    } catch(e) { console.error("Key Import Error", e); }
+
+    myUsername = data.username;
+
+    // 2. Chat "SECURE_INBOX" erstellen
+    registerChat('HQ_INBOX', 'SECURE_INBOX', 'system');
+
+    // 3. UI Updates
     printLine(' ', '');
     printLine('########################################', 'success-msg');
-    printLine(`WELCOME BACK, ${data.username}.`, 'success-msg');
-    printLine(`INBOX STATUS: ${data.inboxCount} ENCRYPTED REPORTS.`, 'success-msg');
-    printLine('Type "/hq inbox" to open the decryption dashboard.', 'system-msg');
+    printLine(`WELCOME, DIRECTOR.`, 'success-msg');
+    printLine(`UPLINK SECURED: ${data.id}`, 'success-msg');
     printLine('########################################', 'success-msg');
 
-    promptSpan.textContent = 'HQ/COMMAND>';
+    promptSpan.textContent = `${data.id}/COMMAND>`;
     promptSpan.className = 'prompt-error';
+
+    // 4. Inbox sofort öffnen
+    switchChat('HQ_INBOX');
 });
 
 // 3. Inbox Daten (HQ)
-socket.on('hq_inbox_data', (inbox) => {
-    if (viewMode === 'INBOX') renderInbox(inbox);
+// INBOX DATEN EMPFANGEN (Live-Ticker Modus)
+socket.on('hq_inbox_data', async (inbox) => {
+    const chatId = 'HQ_INBOX';
+    const chat = myChats[chatId];
+    if (!chat) return;
+
+    // 1. SORTIEREN: Das Neueste (höchster Timestamp) soll nach OBEN (Index 0)
+    inbox.sort((a, b) => b.timestamp - a.timestamp);
+
+    // 2. FILTERN: Nur Nachrichten anzeigen, die NACH meinem Login kamen
+    // (Wir ignorieren alles, was schon vorher da war)
+    const liveMessages = inbox.filter(msg => msg.timestamp >= window.hqSessionStart);
+
+    // Verlauf leeren, wir bauen ihn neu auf
+    chat.history = [];
+
+    // Header Info (Optional, damit man sieht, dass es live ist)
+    chat.history.push(`<div class="system-msg" style="margin-bottom:20px;">/// SECURE LIVE FEED (SESSION STARTED: ${new Date(window.hqSessionStart).toLocaleTimeString()}) ///</div>`);
+
+    for (const msg of liveMessages) {
+        let content = "[DECRYPTING...]";
+
+        if (window.hqPrivateKey) {
+            try {
+                content = await decryptHqMessage(msg.content, window.hqPrivateKey);
+            } catch(e) { content = "[DECRYPTION FAILED]"; }
+        }
+
+        const senderInfo = `SENDER: ${msg.senderName} [ID: ${msg.senderId}]`;
+
+        // HTML Box
+        const html = `
+            <div class="inbox-message" style="border: 1px solid #d00; background: rgba(50,0,0,0.2); margin: 10px 0; padding: 10px; position:relative;">
+                <div style="font-size: 0.7em; color: #d00; border-bottom: 1px solid #d00; margin-bottom: 5px; display:flex; justify-content:space-between; align-items:center;">
+                    <span>RECEIVED: ${new Date(msg.timestamp).toLocaleTimeString()}</span>
+                    
+                    <button class="voice-btn" style="font-size:0.8em; padding:2px 5px;" onclick="window.initHqConnection('${msg.senderId}')">
+                        [ INITIATE HANDSHAKE ]
+                    </button>
+                </div>
+                
+                <div style="color: #0f0; font-size: 0.8em; margin-bottom: 5px; font-weight:bold;">
+                    ${senderInfo}
+                </div>
+
+                <div style="color: #fff; font-family: monospace; white-space: pre-wrap;">${content}</div>
+            </div>
+        `;
+        chat.history.push(html);
+    }
+
+    // Wenn gar nichts Neues da ist
+    if (liveMessages.length === 0) {
+        chat.history.push(`<div class="system-msg" style="opacity:0.5;">... WAITING FOR INCOMING SIGNALS ...</div>`);
+    }
+
+    // UI Refresh
+    if (activeChatId === chatId) {
+        // Da wir switchChat nutzen, wird normalerweise nach unten gescrollt.
+        // Bei "Neuestes Oben" ist das okay, aber man sieht halt das Unterste (Älteste der Session).
+        // Wir rendern neu:
+        switchChat(chatId);
+
+        // OPTIONAL: Wenn du willst, dass man immer OBEN landet (beim Neuesten):
+        output.scrollTop = 0;
+    } else {
+        if (liveMessages.length > 0) {
+            chat.unread = liveMessages.length;
+            renderChatList();
+            printLine(`(i) NEW INTEL RECEIVED (${liveMessages.length})`, 'system-msg');
+        }
+    }
+});
+
+// HQ BROADCAST EMPFANGEN
+socket.on('hq_broadcast_received', (data) => {
+    // data: { text, instName, instTag, instColor, senderName, timestamp }
+
+    const target = 'LOCAL'; // Immer im Local Shell anzeigen
+
+    // Design: Rahmen und Titel in der Farbe der Institution
+    const color = data.instColor;
+    const shadow = `0 0 5px ${color}`;
+
+    const html = `
+    <div style="
+        border: 2px solid ${color}; 
+        background: rgba(0, 0, 0, 0.8); 
+        padding: 15px; 
+        margin: 15px 0; 
+        box-shadow: ${shadow};
+        position: relative;
+    ">
+        <div style="
+            color: ${color}; 
+            font-weight: bold; 
+            font-size: 1.1em; 
+            border-bottom: 1px solid ${color}; 
+            padding-bottom: 8px; 
+            margin-bottom: 8px;
+            text-shadow: ${shadow};
+            text-transform: uppercase;
+        ">
+            ⚠️ OFFICIAL ANNOUNCEMENT: [${data.instTag}]
+        </div>
+        
+        <div style="
+            color: #fff; 
+            font-size: 1.1em; 
+            text-align: center; 
+            padding: 10px 0;
+            font-family: monospace;
+        ">
+            "${data.text}"
+        </div>
+        
+        <div style="
+            text-align: right; 
+            font-size: 0.8em; 
+            color: ${color}; 
+            margin-top: 10px;
+            opacity: 0.8;
+        ">
+            — ISSUED BY: ${data.instTag} ${data.senderName}<br>
+            ${data.instName}
+        </div>
+    </div>
+    `;
+
+    // 1. In Local Shell History speichern & anzeigen
+    if (myChats[target]) {
+        myChats[target].history.push(html);
+
+        if (activeChatId === target) {
+            const div = document.createElement('div');
+            div.innerHTML = html;
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        } else {
+            myChats[target].unread++;
+            renderChatList();
+
+            // 2. Warnung im aktuellen Chat (falls man woanders ist)
+            // Wir nutzen hier auch die Farbe der Institution für den Hinweis!
+            const alertMsg = `<span style="color:${color}">⚠️ INCOMING SIGNAL from [${data.instTag}] in LOCAL_SHELL</span>`;
+            printToChat(activeChatId, alertMsg, '');
+        }
+    }
 });
 
 // --- WEBRTC SIGNALING (P2P) ---
@@ -3621,6 +4004,59 @@ async function renderInbox(messages) {
 
     output.appendChild(container);
 }
+
+// --- LIVE SEARCH FILTER (Für HQ Inbox) ---
+document.getElementById('command-input').addEventListener('input', (e) => {
+    // Nur aktiv, wenn wir in der Inbox sind
+    if (activeChatId === 'HQ_INBOX') {
+        const term = e.target.value.toLowerCase();
+        // Alle Nachrichten im Chat-Fenster holen
+        const messages = document.querySelectorAll('.inbox-message');
+
+        messages.forEach(msg => {
+            const text = msg.innerText.toLowerCase();
+            // Anzeigen oder Verstecken basierend auf Treffer
+            msg.style.display = text.includes(term) ? 'block' : 'none';
+        });
+    }
+});
+
+// A) Button Click Handler
+window.initHqConnection = (targetId) => {
+    printLine(`Checking carrier signal for Node [${targetId}]...`, 'system-msg');
+    // Wir fragen den Server: "Ist der noch da?"
+    socket.emit('hq_connect_req', targetId);
+};
+
+// B) Server Antwort: Ja, ist online -> Starte normalen Handshake
+socket.on('hq_connect_approved', async (data) => {
+    // data.targetId ist sicher online.
+    const targetKey = data.targetId;
+
+    printLine(`Target confirmed. Initiating Encryption Handshake...`, 'success-msg');
+
+    // 1. Ephemeren Schlüssel generieren
+    const ephemeralKeyPair = await generateKeyPair();
+    const pubKeyPem = await exportPublicKey(ephemeralKeyPair.publicKey);
+
+    // --- FIX: WIR SPEICHERN DAS KEYPAIR SEPARAT GLOBAL ---
+    // Das ist der "VIP Parkplatz" für den HQ-Schlüssel.
+    // Egal wie der Server den User später nennt, wir wissen: Das hier ist der Schlüssel.
+    window.hqPendingKeyPair = ephemeralKeyPair;
+    // -----------------------------------------------------
+
+    // Wir lassen es zur Sicherheit auch im alten Speicher, falls P2P Logik greift
+    outgoingConnects[targetKey] = {
+        privateKey: ephemeralKeyPair.privateKey,
+        publicKeyString: pubKeyPem
+    };
+
+    // 2. Request senden
+    socket.emit('request_connection', {
+        targetKey: targetKey,
+        publicKey: pubKeyPem
+    });
+});
 
 // --- INIT ---
 runBootSequence();

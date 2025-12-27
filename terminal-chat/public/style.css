@@ -301,6 +301,11 @@ html, body {
     z-index: 2;
 }
 
+#command-input::placeholder {
+    opacity: 0.4;        /* Hier stellen wir ein, wie "durchsichtig" es ist (0.1 bis 1.0) */
+    font-style: italic;  /* Optional: Kursiv sieht oft technischer aus */
+}
+
 #cmd-mirror {
     z-index: 1;
     color: #e0e0e0; /* Text sichtbar */

@@ -11,6 +11,7 @@ const crypto = require('crypto');
 const webpush = require('web-push');
 const fs = require('fs'); // <--- WICHTIG für das Speichern der Blog-Posts
 const escapeHtml = require('escape-html');
+const { generateKeyPairSync } = require('crypto');
 
 
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
@@ -25,17 +26,33 @@ const groups = {};
 const INSTITUTIONS = {
     'MI6': {
         name: 'Secret Intelligence Service',
+        tag: 'MI6',               // <--- Das Kürzel für die Anzeige
+        color: '#ff9900',         // <--- Matrix-Grün
         password: process.env.MI6_PASS || '007',
-        secret: 'KVKFKRCPNZQUYMLXOVYDSQKJKZDTSRLD', // Beispiel Secret (Base32)
-        inboxFile: 'mi6_inbox.json'
+        secret: 'KVKFKRCPNZQUYMLXOVYDSQKJKZDTSRLD',
+        inboxFile: 'mi6_inbox.json',
+        keys: generateKeys()
     },
     'CIA': {
         name: 'Central Intelligence Agency',
+        tag: 'CIA',
+        color: '#0099ff',         // <--- CIA-Blau
         password: process.env.CIA_PASS || 'langley',
-        secret: 'IVGVESKTL52WKSKOIVGEYTKMKJTWKZI=', // Beispiel Secret
-        inboxFile: 'cia_inbox.json'
+        secret: 'IVGVESKTL52WKSKOIVGEYTKMKJTWKZI=',
+        inboxFile: 'cia_inbox.json',
+        keys: generateKeys()
     }
+    // Du kannst hier weitere hinzufügen...
 };
+
+function generateKeys() {
+    const { publicKey, privateKey } = generateKeyPairSync('rsa', {
+        modulusLength: 2048,
+        publicKeyEncoding: { type: 'spki', format: 'der' },
+        privateKeyEncoding: { type: 'pkcs8', format: 'der' }
+    });
+    return { pub: publicKey.toString('base64'), priv: privateKey.toString('base64') };
+}
 
 // Login-Status Speicher (RAM)
 // Speichert: { socketId: { step: 0-2, targetId: 'MI6', attempts: 0 } }
@@ -482,25 +499,45 @@ io.on('connection', (socket) => {
 
         if (verified) {
             // --- ERFOLG! LOGIN DURCHFÜHREN ---
-            delete authSessions[socket.id]; // Auth Session aufräumen
+            delete authSessions[socket.id];
 
-            // Inbox laden (simuliert)
+            // 1. User Objekt aktualisieren
+            users[socket.id].institution = {
+                tag: targetInst.tag,
+                color: targetInst.color
+            };
+
+            // SICHERHEIT: Original-Namen merken (damit wir nicht [MI6] [MI6] Elias bekommen)
+            if (!users[socket.id].originalName) {
+                users[socket.id].originalName = users[socket.id].username;
+            }
+
+            // NEU: Name ist jetzt [TAG] + Echter Username (z.B. "[MI6] Elias")
+            // Statt targetInst.name ("Secret Intelligence Service") nehmen wir den User-Namen
+            const newName = `[${targetInst.tag}] ${users[socket.id].originalName}`;
+
+            users[socket.id].username = newName;
+
+            // Inbox laden
             let inbox = [];
             const inboxPath = path.join(DATA_DIR, targetInst.inboxFile);
             if (fs.existsSync(inboxPath)) {
                 try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
             }
 
-            // Client den Erfolg melden
+            // Client den Erfolg melden (Hier auch newName nutzen!)
             socket.emit('hq_login_success', {
                 id: session.targetId,
-                username: targetInst.name,
-                inboxCount: inbox.length
+                username: newName, // <--- Hier senden wir jetzt "[MI6] Elias"
+                inboxCount: inbox.length,
+                privateKey: targetInst.keys.priv
             });
 
-            // Socket dem HQ-Raum hinzufügen
-            socket.join('HQ_CHANNEL');
-            serverLog(`[SECURITY] AUTH SUCCESS: ${targetInst.name} is online.`);
+            socket.join(`HQ_${session.targetId}`);
+            serverLog(`[SECURITY] AUTH SUCCESS: ${users[socket.id].originalName} is active as ${session.targetId}.`);
+
+            // Update an alle senden
+            broadcastInstitutionUpdate(socket.id);
 
         } else {
             session.attempts++;
@@ -515,40 +552,125 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 2. PUBLIC KEY ANFORDERN (Für Informanten)
-    socket.on('hq_get_key_req', () => {
-        if (hqPublicKey) {
-            socket.emit('hq_key_res', hqPublicKey);
+    // INFORMANT: Key anfordern für eine bestimmte Behörde
+    socket.on('hq_get_key_req', (targetId) => {
+        const inst = INSTITUTIONS[targetId.toUpperCase()];
+        if (inst) {
+            socket.emit('hq_key_res', { targetId: targetId.toUpperCase(), key: inst.keys.pub });
         } else {
-            socket.emit('system_message', 'ERROR: Uplink offline. Cannot secure transmission.');
+            socket.emit('system_message', `ERROR: Institution '${targetId}' unknown.`);
         }
     });
 
-    // 3. TIP SENDEN (Vom Informanten)
-    socket.on('hq_send_tip', (encryptedData) => {
-        // Spam Schutz (Max 3 Nachrichten pro Minute)
-        const now = Date.now();
-        const last = tipRateLimit[socket.id] || 0;
-        if (now - last < 20000) {
-            socket.emit('system_message', 'WARNING: Frequency limit. Wait before sending more intel.');
-            return;
-        }
-        tipRateLimit[socket.id] = now;
+    // INFORMANT: Tipp senden
+    socket.on('hq_send_tip', (data) => {
+        const inst = INSTITUTIONS[data.targetId];
+        if (!inst) return;
 
-        const tip = {
-            id: Date.now() + '-' + Math.floor(Math.random()*1000),
+        // User Identität sicher vom Server holen
+        const senderUser = users[socket.id];
+        const safeSenderName = senderUser ? senderUser.username : 'Unknown';
+
+        // Speichern
+        const inboxPath = path.join(DATA_DIR, inst.inboxFile);
+        let inbox = [];
+        if (fs.existsSync(inboxPath)) {
+            try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
+        }
+
+        const msg = {
+            id: Date.now() + '-' + Math.floor(Math.random()*10000),
             timestamp: Date.now(),
-            content: encryptedData, // Das ist RSA verschlüsselt!
-            read: false
+            content: data.content, // Verschlüsselt
+            // SECURITY: Wir speichern die Socket-ID der Session fest ab
+            senderId: socket.id,
+            senderName: safeSenderName
         };
 
-        hqInbox.push(tip);
-        saveHqInbox();
+        inbox.push(msg);
+        fs.writeFileSync(inboxPath, JSON.stringify(inbox, null, 2));
 
-        socket.emit('system_message', '>>> INTEL RECEIVED. TRANSMISSION SECURED.');
+        socket.emit('system_message', `>>> INTEL DELIVERED TO ${inst.name}.`);
 
-        // Live Update an HQ falls online
-        io.to('HQ_CHANNEL').emit('hq_new_intel', tip);
+        // Live Update an das eingeloggte HQ
+        io.to(`HQ_${data.targetId}`).emit('hq_inbox_data', inbox);
+    });
+
+    // HQ: SICHERER VERBINDUNGSAUFBAU ZUM INFORMANTEN
+    socket.on('hq_connect_req', (targetSocketId) => {
+        // 1. Prüfen: Ist der User im RAM registriert? (WICHTIG!)
+        const targetUser = users[targetSocketId];
+
+        if (!targetUser) {
+            // User ist technisch vielleicht da, aber nicht eingeloggt/registriert
+            socket.emit('system_message', 'ERROR: UPLINK UNSTABLE. Target not found in user registry (Refresh Target Client).');
+            return;
+        }
+
+        // 2. Prüfen: Ist die Socket-Verbindung aktiv?
+        const targetSocket = io.sockets.sockets.get(targetSocketId);
+        if (!targetSocket) {
+            socket.emit('system_message', 'ERROR: UPLINK LOST. Target went offline.');
+            return;
+        }
+
+        // 3. Berechtigung HQ prüfen
+        const me = users[socket.id];
+        if (!me || !me.institution) {
+            socket.emit('system_message', 'ACCESS DENIED.');
+            return;
+        }
+
+        // 4. Alles grün -> Handshake freigeben
+        socket.emit('hq_connect_approved', { targetId: targetSocketId });
+    });
+
+    // HQ: GLOBAL BROADCAST
+    socket.on('hq_broadcast_req', (text) => {
+        const user = users[socket.id];
+
+        // 1. Sicherheits-Check: Ist der User bei einer Institution eingeloggt?
+        if (!user || !user.institution) {
+            socket.emit('system_message', 'ERROR: ACCESS DENIED. Authorization required.');
+            return;
+        }
+
+        // 2. Datenpaket schnüren
+        const broadcastData = {
+            text: text,
+            instName: INSTITUTIONS[user.institution.tag].name, // "Secret Intelligence Service"
+            instTag: user.institution.tag,                     // "MI6"
+            instColor: user.institution.color,                 // "#00ff00"
+            senderName: user.originalName,                     // "Elias" (Der echte Name des Agenten)
+            timestamp: Date.now()
+        };
+
+        // 3. An ALLE senden
+        io.emit('hq_broadcast_received', broadcastData);
+
+        serverLog(`HQ BROADCAST von ${user.username}: ${text}`);
+    });
+
+    // HQ: Nachricht löschen
+    socket.on('hq_delete_msg', (msgId) => {
+        // Wir müssen herausfinden, wer der User ist (via Room Hack oder Session)
+        // Einfachheitshalber: Wir suchen in allen Inboxes (unschön aber wirksam für Demo)
+        Object.values(INSTITUTIONS).forEach(inst => {
+            const inboxPath = path.join(DATA_DIR, inst.inboxFile);
+            if (fs.existsSync(inboxPath)) {
+                let inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8'));
+                const originalLen = inbox.length;
+                inbox = inbox.filter(m => m.id !== msgId);
+
+                if (inbox.length !== originalLen) {
+                    fs.writeFileSync(inboxPath, JSON.stringify(inbox, null, 2));
+                    // Update an den HQ Raum senden
+                    // Wir finden den Key anhand des Values (etwas hacky, aber spart Code)
+                    const key = Object.keys(INSTITUTIONS).find(k => INSTITUTIONS[k] === inst);
+                    io.to(`HQ_${key}`).emit('hq_inbox_data', inbox);
+                }
+            }
+        });
     });
 
     // 4. INBOX ABRUFEN (Nur für HQ)
@@ -556,15 +678,6 @@ io.on('connection', (socket) => {
         // Sicherheits-Check: Ist der Socket im HQ Room?
         if (socket.rooms.has('HQ_CHANNEL')) {
             socket.emit('hq_inbox_data', hqInbox);
-        }
-    });
-
-    // 5. NACHRICHT LÖSCHEN (Nur HQ)
-    socket.on('hq_delete_msg', (id) => {
-        if (socket.rooms.has('HQ_CHANNEL')) {
-            hqInbox = hqInbox.filter(m => m.id !== id);
-            saveHqInbox();
-            socket.emit('hq_inbox_data', hqInbox); // Refresh
         }
     });
 
@@ -719,7 +832,7 @@ io.on('connection', (socket) => {
         socket.emit('ping_result', { query: query, results: results });
     });
 
-    // 5. VERBINDUNGSANFRAGE (Ghost Aware)
+    // 5. VERBINDUNGSANFRAGE (Ghost Aware & HQ Compatible)
     socket.on('request_connection', (data) => {
         // Spam Schutz
         const now = Date.now();
@@ -736,7 +849,20 @@ io.on('connection', (socket) => {
         const requester = users[socket.id];
         if (!requester) return;
 
-        const targetId = Object.keys(users).find(id => users[id].key === data.targetKey);
+        // --- LOGIK UPDATE ANFANG ---
+
+        let targetId = null;
+
+        // 1. Prüfen: Ist 'data.targetKey' vielleicht direkt eine Socket-ID? (HQ Button Fall)
+        if (users[data.targetKey]) {
+            targetId = data.targetKey;
+        }
+        // 2. Fallback: Ist es ein Fingerabdruck/Key? (Manueller /connect Fall)
+        else {
+            targetId = Object.keys(users).find(id => users[id].key === data.targetKey);
+        }
+
+        // --- LOGIK UPDATE ENDE ---
 
         if (targetId && targetId !== socket.id) {
 
@@ -745,18 +871,18 @@ io.on('connection', (socket) => {
 
             io.to(targetId).emit('incoming_request', {
                 requesterId: socket.id,
-                requesterName: displayRequesterName, // <--- Maskierter Name
-                requesterKey: requester.key,         // Echter Key (wichtig für /accept)
+                requesterName: displayRequesterName,
+                requesterKey: requester.key,
                 publicKey: data.publicKey
             });
 
-            // Push auch anpassen
             const targetUser = users[targetId];
             sendPush(targetUser, 'INCOMING CONNECTION', `Node ${displayRequesterName} requests secure handshake.`);
 
             socket.emit('system_message', `SECURE HANDSHAKE: Request sent to ${users[targetId].username}...`);
         } else {
-            socket.emit('system_message', `FEHLER: Key '${data.targetKey}' nicht gefunden.`);
+            // Hier geben wir jetzt die ID/Key aus, damit man sieht, was gesucht wurde
+            socket.emit('system_message', `FEHLER: Target '${data.targetKey}' nicht gefunden oder offline.`);
         }
     });
 
@@ -3432,4 +3558,34 @@ function generatePromoList() {
             count: g.members.length,
             date: g.promotedAt
         }));
+}
+
+// Hilfsfunktion: Sagt allen relevanten Usern, dass dieser User jetzt eine Institution ist
+function broadcastInstitutionUpdate(userId) {
+    const user = users[userId];
+    if (!user || !user.institution) return;
+
+    const updatePacket = {
+        key: user.key,
+        username: user.username,
+        tag: user.institution.tag,
+        color: user.institution.color
+    };
+
+    // 1. An alle Private Partners
+    user.partners.forEach(pid => {
+        io.to(pid).emit('user_institution_update', updatePacket);
+    });
+
+    // 2. An aktuelle Gruppe
+    if (user.currentGroup) {
+        // FEHLER BEHOBEN: Hier stand vorher 'socket.to', muss aber 'io.to' sein
+        io.to(`group_${user.currentGroup}`).emit('user_institution_update', updatePacket);
+    }
+
+    // 3. An Public Room
+    if (user.currentPub) {
+        // FEHLER BEHOBEN: Hier stand vorher 'socket.to', muss aber 'io.to' sein
+        io.to(`pub_${user.currentPub}`).emit('user_institution_update', updatePacket);
+    }
 }
