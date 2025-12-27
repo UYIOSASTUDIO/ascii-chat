@@ -19,6 +19,28 @@ const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
 const activeGroupLinks = {};
 const groups = {};
 
+// --- INSTITUTIONAL ACCESS CONTROL (IAC) ---
+// Hier definierst du die festen Accounts.
+// SECRET muss ein Base32 String sein (für Google Authenticator).
+const INSTITUTIONS = {
+    'MI6': {
+        name: 'Secret Intelligence Service',
+        password: process.env.MI6_PASS || '007',
+        secret: 'KVKFKRCPNZQUYMLXOVYDSQKJKZDTSRLD', // Beispiel Secret (Base32)
+        inboxFile: 'mi6_inbox.json'
+    },
+    'CIA': {
+        name: 'Central Intelligence Agency',
+        password: process.env.CIA_PASS || 'langley',
+        secret: 'IVGVESKTL52WKSKOIVGEYTKMKJTWKZI=', // Beispiel Secret
+        inboxFile: 'cia_inbox.json'
+    }
+};
+
+// Login-Status Speicher (RAM)
+// Speichert: { socketId: { step: 0-2, targetId: 'MI6', attempts: 0 } }
+const authSessions = {};
+
 if (!publicVapidKey || !privateVapidKey) {
     console.error("FATAL ERROR: VAPID Keys fehlen in der .env Datei!");
     process.exit(1);
@@ -113,6 +135,31 @@ let privateGroups = {}; // Speicher für geschlossene Gruppen
 let deadDrops = {};
 
 let activeShares = {};
+
+// --- PROJECT INTELLIGENCE (SECURE DROP) ---
+const HQ_CONFIG = {
+    id: 'MI6-HQ-007',        // Die feste ID
+    username: 'INTELLIGENCE', // Der feste Name
+    password: process.env.HQ_PASSWORD || 'secret_intel_pass', // Passwort für den Zugang
+    storageFile: path.join(__dirname, 'secure_storage', 'hq_inbox.json')
+};
+
+let hqPublicKey = null; // Der aktuelle Public Key des HQ (wird beim Login gesetzt)
+let hqInbox = [];       // Speicher für Nachrichten
+
+// Inbox laden beim Start
+if (fs.existsSync(HQ_CONFIG.storageFile)) {
+    try {
+        hqInbox = JSON.parse(fs.readFileSync(HQ_CONFIG.storageFile, 'utf8'));
+    } catch (e) { console.error("HQ Inbox Load Error:", e); }
+}
+
+function saveHqInbox() {
+    fs.writeFileSync(HQ_CONFIG.storageFile, JSON.stringify(hqInbox, null, 2));
+}
+
+// Rate Limiting für Tips (Spam Schutz)
+const tipRateLimit = {};
 
 // --- BLOG SYSTEM CONFIG ---
 const DATA_DIR = path.join(__dirname, 'secure_storage');
@@ -360,6 +407,164 @@ io.on('connection', (socket) => {
 
         if (banCount > 0) {
             socket.emit('system_message', `SUCCESS: ${banCount} target(s) neutralized.`);
+        }
+    });
+
+    // --- HQ SYSTEM (SECURE DROP) ---
+
+    // --- SECURE AUTHENTICATION FLOW (3-STAGE) ---
+
+    // STUFE 1: ID CHECK (/auth ID)
+    socket.on('auth_init', (institutionId) => {
+        const id = institutionId.toUpperCase();
+
+        if (INSTITUTIONS[id]) {
+            // Session initialisieren
+            authSessions[socket.id] = {
+                step: 1, // Warten auf Passwort
+                targetId: id,
+                attempts: 0
+            };
+
+            // Client auffordern: Passwort eingeben
+            socket.emit('auth_step_pass_req', INSTITUTIONS[id].name);
+        } else {
+            // Fake Delay gegen User-Enumeration (Sicherheit!)
+            setTimeout(() => {
+                socket.emit('system_message', 'ERROR: Institution ID not found in global registry.');
+            }, 1000);
+        }
+    });
+
+    // STUFE 2: PASSWORT CHECK
+    socket.on('auth_verify_pass', (password) => {
+        const session = authSessions[socket.id];
+
+        // Sicherheits-Check: Darf der User hier sein?
+        if (!session || session.step !== 1) return;
+
+        const targetInst = INSTITUTIONS[session.targetId];
+
+        if (password === targetInst.password) {
+            // Passwort Richtig -> Weiter zu 2FA
+            session.step = 2;
+            session.attempts = 0; // Reset für den nächsten Schritt (oder beibehalten, je nach Strenge)
+            socket.emit('auth_step_2fa_req');
+        } else {
+            // Passwort Falsch
+            session.attempts++;
+            const left = 3 - session.attempts;
+
+            if (left <= 0) {
+                delete authSessions[socket.id]; // Session killen
+                socket.emit('auth_failed', 'MAXIMUM ATTEMPTS EXCEEDED. CONNECTION LOCKED.');
+            } else {
+                socket.emit('system_message', `ACCESS DENIED: Invalid Password. ${left} attempts remaining.`);
+            }
+        }
+    });
+
+    // STUFE 3: 2FA CHECK (Google Authenticator)
+    socket.on('auth_verify_2fa', (token) => {
+        const session = authSessions[socket.id];
+
+        if (!session || session.step !== 2) return;
+
+        const targetInst = INSTITUTIONS[session.targetId];
+
+        // Token prüfen (mit speakeasy)
+        const verified = speakeasy.totp.verify({
+            secret: targetInst.secret,
+            encoding: 'base32',
+            token: token,
+            window: 2 // Erlaubt leichte Zeitabweichung
+        });
+
+        if (verified) {
+            // --- ERFOLG! LOGIN DURCHFÜHREN ---
+            delete authSessions[socket.id]; // Auth Session aufräumen
+
+            // Inbox laden (simuliert)
+            let inbox = [];
+            const inboxPath = path.join(DATA_DIR, targetInst.inboxFile);
+            if (fs.existsSync(inboxPath)) {
+                try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
+            }
+
+            // Client den Erfolg melden
+            socket.emit('hq_login_success', {
+                id: session.targetId,
+                username: targetInst.name,
+                inboxCount: inbox.length
+            });
+
+            // Socket dem HQ-Raum hinzufügen
+            socket.join('HQ_CHANNEL');
+            serverLog(`[SECURITY] AUTH SUCCESS: ${targetInst.name} is online.`);
+
+        } else {
+            session.attempts++;
+            const left = 3 - session.attempts;
+
+            if (left <= 0) {
+                delete authSessions[socket.id];
+                socket.emit('auth_failed', 'SECURITY VIOLATION: INVALID 2FA TOKEN.');
+            } else {
+                socket.emit('system_message', `ACCESS DENIED: Invalid Token. ${left} attempts remaining.`);
+            }
+        }
+    });
+
+    // 2. PUBLIC KEY ANFORDERN (Für Informanten)
+    socket.on('hq_get_key_req', () => {
+        if (hqPublicKey) {
+            socket.emit('hq_key_res', hqPublicKey);
+        } else {
+            socket.emit('system_message', 'ERROR: Uplink offline. Cannot secure transmission.');
+        }
+    });
+
+    // 3. TIP SENDEN (Vom Informanten)
+    socket.on('hq_send_tip', (encryptedData) => {
+        // Spam Schutz (Max 3 Nachrichten pro Minute)
+        const now = Date.now();
+        const last = tipRateLimit[socket.id] || 0;
+        if (now - last < 20000) {
+            socket.emit('system_message', 'WARNING: Frequency limit. Wait before sending more intel.');
+            return;
+        }
+        tipRateLimit[socket.id] = now;
+
+        const tip = {
+            id: Date.now() + '-' + Math.floor(Math.random()*1000),
+            timestamp: Date.now(),
+            content: encryptedData, // Das ist RSA verschlüsselt!
+            read: false
+        };
+
+        hqInbox.push(tip);
+        saveHqInbox();
+
+        socket.emit('system_message', '>>> INTEL RECEIVED. TRANSMISSION SECURED.');
+
+        // Live Update an HQ falls online
+        io.to('HQ_CHANNEL').emit('hq_new_intel', tip);
+    });
+
+    // 4. INBOX ABRUFEN (Nur für HQ)
+    socket.on('hq_fetch_inbox', () => {
+        // Sicherheits-Check: Ist der Socket im HQ Room?
+        if (socket.rooms.has('HQ_CHANNEL')) {
+            socket.emit('hq_inbox_data', hqInbox);
+        }
+    });
+
+    // 5. NACHRICHT LÖSCHEN (Nur HQ)
+    socket.on('hq_delete_msg', (id) => {
+        if (socket.rooms.has('HQ_CHANNEL')) {
+            hqInbox = hqInbox.filter(m => m.id !== id);
+            saveHqInbox();
+            socket.emit('hq_inbox_data', hqInbox); // Refresh
         }
     });
 
@@ -2608,6 +2813,25 @@ io.on('connection', (socket) => {
             });
         } else {
             // console.log("Blocked unauthorized P2P signal");
+        }
+    });
+
+    // --- SECURITY: RE-KEYING SIGNAL (Rotation) ---
+    socket.on('rekey_signal', (data) => {
+        // data: { targetKey, type: 'request'|'response', publicKey, ... }
+        const user = users[socket.id];
+        if (!user) return;
+
+        const targetUser = Object.values(users).find(u => u.key === data.targetKey);
+
+        // Sicherheits-Check: Sind sie Partner?
+        if (targetUser && user.partners.includes(targetUser.id)) {
+            io.to(targetUser.id).emit('rekey_signal_received', {
+                senderKey: user.key,
+                type: data.type,
+                publicKey: data.publicKey
+            });
+            // serverLog(`Security Rotation: ${user.username} -> ${targetUser.username}`);
         }
     });
 

@@ -724,6 +724,36 @@ async function handleInput(text) {
         return;
     }
 
+    // --- AUTH FLOW: PASSWORT EINGABE ---
+    if (appState === 'AUTH_PASS') {
+        if (text === 'cancel') {
+            printLine('Authentication aborted.', 'system-msg');
+            appState = 'IDLE';
+            promptSpan.textContent = promptSpan.getAttribute('data-prev-prompt') || '>';
+            promptSpan.className = 'prompt-default';
+            return;
+        }
+        // Passwort senden (Visuell sieht man es leider im Terminal,
+        // für echte Sicherheit könnte man input.type='password' toggeln,
+        // aber das bricht den Terminal-Look. Wir lassen es textbasiert für den Hack-Vibe.)
+        socket.emit('auth_verify_pass', text);
+        // Wir bleiben im State, bis Server antwortet
+        return;
+    }
+
+    // --- AUTH FLOW: 2FA EINGABE ---
+    if (appState === 'AUTH_2FA') {
+        if (text === 'cancel') {
+            printLine('Authentication aborted.', 'system-msg');
+            appState = 'IDLE';
+            promptSpan.textContent = promptSpan.getAttribute('data-prev-prompt') || '>';
+            promptSpan.className = 'prompt-default';
+            return;
+        }
+        socket.emit('auth_verify_2fa', text);
+        return;
+    }
+
     // --- NEU: GROUP EXIT DECISION ---
     if (appState === 'DECIDING_GROUP_EXIT') {
         const args = text.split(' ');
@@ -947,18 +977,22 @@ async function handleInput(text) {
         const args = text.split(' ');
         const cmd = args[0].toLowerCase();
 
-     if (cmd === '/connect') {
+        if (cmd === '/connect') {
             if (args[1]) {
                 const targetKey = args[1];
                 printLine(`Initiating handshake protocol with Node [${targetKey}]...`, 'system-msg');
 
-                // WICHTIG: Lokale Variable statt globale, damit wir nichts überschreiben!
+                // 1. Ephemeren Schlüssel generieren
                 const ephemeralKeyPair = await generateKeyPair();
-
-                // Wir speichern den Private Key spezifisch für DIESES Ziel
-                outgoingConnects[targetKey] = ephemeralKeyPair.privateKey;
-
                 const pubKeyPem = await exportPublicKey(ephemeralKeyPair.publicKey);
+
+                // --- FIX: Wir speichern jetzt BEIDES (Private Key & Public String) ---
+                // Damit wir später wissen, mit welchem "Gesicht" wir uns vorgestellt haben.
+                outgoingConnects[targetKey] = {
+                    privateKey: ephemeralKeyPair.privateKey,
+                    publicKeyString: pubKeyPem
+                };
+                // --------------------------------------------------------------------
 
                 // Senden
                 socket.emit('request_connection', {
@@ -981,6 +1015,7 @@ async function handleInput(text) {
 
                 // 2. Secret berechnen und ZWISCHENSPEICHERN (Nicht registrieren!)
                 tempDerivedKey = await deriveSecretKey(myKeyPair.privateKey, reqData.publicKey);
+                window.tempPartnerPubKeyString = reqData.publicKey;
 
                 // 3. Dem Server antworten
                 const myPubKeyPem = await exportPublicKey(myKeyPair.publicKey);
@@ -1057,9 +1092,28 @@ async function handleInput(text) {
              printLine('USAGE: /whisper [USER_ID] [MESSAGE]', 'error-msg');
          }
      }
-     else if (cmd === '/auth') {
-         socket.emit('admin_auth', args[1]);
-     }
+        else if (cmd === '/auth') {
+            const param = args[1]; // Das Argument nach /auth
+
+            if (!param) {
+                printLine('USAGE: /auth [ADMIN_TOKEN] OR [INSTITUTION_ID]', 'error-msg');
+                return;
+            }
+
+            // LOGIK-WEICHE:
+            // Wir prüfen mit Regex (Regular Expression), ob es genau 6 Ziffern sind.
+            // Google Authenticator Codes sind immer 6-stellige Zahlen.
+            const isAdminToken = /^\d{6}$/.test(param);
+
+            if (isAdminToken) {
+                // 1. ALTER WEG: Es sieht aus wie ein Code -> Versuche Admin Login
+                socket.emit('admin_auth', param);
+            } else {
+                // 2. NEUER WEG: Es ist Text (z.B. "MI6") -> Starte den HQ-Prozess
+                printLine(`Connecting to secure gateway [${param.toUpperCase()}]...`, 'system-msg');
+                socket.emit('auth_init', param);
+            }
+        }
 
      // --- ADMIN BAN HAMMER ---
      else if (cmd === '/ban') {
@@ -1090,6 +1144,23 @@ async function handleInput(text) {
         else if (cmd === '/info') {
             socket.emit('info_request', args[1]);
         }
+     else if (cmd === '/safety') {
+         if (!activeChatId || activeChatId === 'LOCAL' || myChats[activeChatId].type !== 'private') {
+             printLine("ERROR: Safety Numbers are only available in private P2P chats.", "error-msg");
+             return;
+         }
+
+         const chat = myChats[activeChatId];
+         // Wir generieren die Nummer aus den gespeicherten Strings
+         const safetyNum = await generateSafetyNumber(chat.myPublicKeyString, chat.partnerPublicKeyString);
+
+         printLine("------------------------------------------------", "system-msg");
+         printLine("🔐 SECURITY FINGERPRINT (SAFETY NUMBER)", "success-msg");
+         printLine("Compare this number with your partner (e.g. via Phone):", "system-msg");
+         printLine(safetyNum, "highlight-msg");
+         printLine("If it matches, the connection is secure (No Man-in-the-Middle).", "system-msg");
+         printLine("------------------------------------------------", "system-msg");
+     }
     // --- GHOST MODE ---
     else if (cmd === '/ghost') {
         printLine('Initiating Stealth Protocols...', 'system-msg');
@@ -1215,6 +1286,54 @@ async function handleInput(text) {
                 socket.emit('drop_create', { message: msg, timer });
             } else if (sub === 'pickup') socket.emit('drop_pickup', args[2]);
         }
+        // --- SECURE DROP (INFORMANT) ---
+        else if (cmd === '/tip') {
+            const msg = args.slice(1).join(' ');
+            if (!msg) {
+                printLine('USAGE: /tip [CONFIDENTIAL_MESSAGE]', 'error-msg');
+                return;
+            }
+
+            printLine('Establishing secure uplink to HQ...', 'system-msg');
+            // 1. Key anfordern
+            socket.emit('hq_get_key_req');
+
+            // Wir speichern die Nachricht kurz zwischen, bis der Key da ist
+            window.pendingTip = msg;
+        }
+
+        // --- HQ LOGIN & DASHBOARD ---
+        else if (cmd === '/hq') {
+            const sub = args[1];
+            if (sub === 'setup') {
+                // Generiert Keys und speichert sie lokal (Passwort-geschützt wäre besser, aber wir machen es simpel für den Start)
+                printLine('Generating RSA-2048 Identity Keys...', 'system-msg');
+                const keyPair = await generateRsaKeyPair();
+
+                // Speichern im IndexedDB oder LocalStorage (Achtung: Unsicher im Browser, aber für Demo ok)
+                // Besser: Exportieren und User speichern lassen.
+                // Hier vereinfacht: Wir speichern den Private Key im RAM solange der Tab offen ist.
+                window.hqPrivateKey = keyPair.privateKey;
+                window.hqPublicKey = await exportPublicKey(keyPair.publicKey); // Nutzung der existierenden export funktion (spki)
+
+                printLine('IDENTITY GENERATED. READY TO LOGIN.', 'success-msg');
+            }
+            else if (sub === 'login') {
+                const password = args[2];
+                if (!window.hqPublicKey) {
+                    printLine('ERROR: No identity found. Run "/hq setup" first.', 'error-msg');
+                    return;
+                }
+                socket.emit('hq_login', { password: password, publicKey: window.hqPublicKey });
+            }
+            else if (sub === 'inbox') {
+                if (!window.isHqLoggedIn) {
+                    printLine('ACCESS DENIED.', 'error-msg');
+                    return;
+                }
+                toggleInboxView();
+            }
+        }
      else if (cmd === '/help') {
          printLine('COMMANDS: /connect, /group, /pub, /drop, /ping, /nudge, /info, /auth, /ghost, /leave', 'system-msg');
      }
@@ -1228,7 +1347,7 @@ async function handleInput(text) {
         return; // WICHTIG: Damit der Befehl nicht als Chat-Nachricht gesendet wird!
     }
 
-    // --- MESSAGING ---
+    // --- MESSAGING (MIT ROTATION & COUNTER) ---
     const currentChat = myChats[activeChatId];
     if (!currentChat || activeChatId === 'LOCAL') {
         printLine('SYSTEM: Local shell. Connect first.', 'error-msg');
@@ -1239,7 +1358,27 @@ async function handleInput(text) {
         return;
     }
 
-// ...
+    // --- AUTOMATIC KEY ROTATION LOGIC ---
+    if (currentChat.type === 'private') {
+        // Zähler initialisieren falls undefined
+        if (typeof currentChat.msgCount === 'undefined') currentChat.msgCount = 0;
+
+        // Wenn 50 Nachrichten erreicht sind -> Rotieren!
+        if (currentChat.msgCount >= 50) {
+            printLine("[SECURITY] Re-Keying Session (Automatic Rotation)...", "system-msg");
+            await performKeyRotation(activeChatId);
+
+            currentChat.msgCount = 0; // Reset
+
+            // Kurze Pause (500ms), damit der Schlüsseltausch durchgeht, bevor die Nachricht verschlüsselt wird
+            // Wir nutzen await wait(500) - wait Funktion ist oben in deinem Code definiert
+            await wait(500);
+        }
+
+        currentChat.msgCount++;
+    }
+    // ------------------------------------
+
     const encrypted = await encryptMessage(text, currentChat.key);
 
     if (currentChat.type === 'pub') socket.emit('pub_message', encrypted);
@@ -1247,7 +1386,7 @@ async function handleInput(text) {
     if (currentChat.type === 'private') {
         socket.emit('message', {
             targetKey: currentChat.id,
-            payload: encrypted // <--- KORRIGIERT: Muss 'encrypted' heißen!
+            payload: encrypted
         });
     }
 }
@@ -1466,54 +1605,72 @@ socket.on('ghost_reveal_result', (data) => {
     // Optional: Automatisch Input füllen hatten wir schon im Klick-Handler gemacht.
 });
 
-// 4. CHAT START (P2P mit Multi-Request Fix)
+// 4. CHAT START (Fixed Safety Number Sync)
 socket.on('chat_start', async (data) => {
     const chatId = data.partnerKey || data.partner;
 
     let finalKey = null;
 
-    // FALL A: Wir sind der Initiator (Wir haben angefragt)
+    // Variablen für Safety Number
+    let myCorrectPubKeyString = null;
+    let partnerPubKeyString = null;
+
+    // FALL A: Wir sind der Initiator (haben /connect gemacht)
     if (data.publicKey) {
         try {
-            // WICHTIG: Wir holen den passenden Private Key aus unserem Speicher!
-            // Falls er dort nicht ist (Notfall), nehmen wir den globalen (myKeyPair.privateKey)
-            const myPrivateKey = outgoingConnects[chatId] || myKeyPair.privateKey;
+            // Wir holen das gespeicherte Objekt aus Schritt 1
+            const storedData = outgoingConnects[chatId];
 
-            finalKey = await deriveSecretKey(myPrivateKey, data.publicKey);
+            let usedPrivateKey;
 
-            // Aufräumen: Key aus dem Speicher löschen, er wird nicht mehr gebraucht
-            if (outgoingConnects[chatId]) delete outgoingConnects[chatId];
+            if (storedData) {
+                // Wir haben einen temporären Schlüssel benutzt!
+                usedPrivateKey = storedData.privateKey;
+                myCorrectPubKeyString = storedData.publicKeyString; // <--- DAS IST DER FIX
 
-        } catch(e) {
-            console.error("Key Error:", e);
-            printLine("CRITICAL ERROR: Key derivation failed.", "error-msg");
-        }
+                // Aufräumen
+                delete outgoingConnects[chatId];
+            } else {
+                // Fallback (sollte nicht passieren, aber zur Sicherheit)
+                usedPrivateKey = myKeyPair.privateKey;
+                myCorrectPubKeyString = await exportPublicKey(myKeyPair.publicKey);
+            }
+
+            finalKey = await deriveSecretKey(usedPrivateKey, data.publicKey);
+            partnerPubKeyString = data.publicKey;
+
+        } catch(e) { console.error("Key Error:", e); }
     }
-    // FALL B: Wir sind der Akzeptierer (Haben Key in /accept berechnet)
+    // FALL B: Wir sind der Akzeptierer (haben /accept gemacht)
     else if (tempDerivedKey) {
         finalKey = tempDerivedKey;
         tempDerivedKey = null;
+
+        // Als Akzeptierer haben wir unseren NEUEN globalen Key gesendet.
+        // Also ist myKeyPair hier korrekt.
+        myCorrectPubKeyString = await exportPublicKey(myKeyPair.publicKey);
+
+        // Den Key des Partners haben wir uns beim Accept gemerkt
+        partnerPubKeyString = window.tempPartnerPubKeyString;
     }
 
-    // Chat registrieren
     if (finalKey) {
         registerChat(chatId, data.partner, 'private', finalKey);
-        switchChat(chatId);
 
+        const chat = myChats[chatId];
+
+        // --- WICHTIG: Die korrekten Strings speichern ---
+        chat.myKeyPair = myKeyPair; // Referenz behalten wir (fürs Rotieren)
+        chat.myPublicKeyString = myCorrectPubKeyString; // <--- FIX: Der tatsächlich gesendete Key
+        chat.partnerPublicKeyString = partnerPubKeyString || "UNKNOWN";
+        chat.msgCount = 0;
+        // ------------------------------------------------
+
+        switchChat(chatId);
         printToChat(chatId, '----------------------------------------', 'system-msg');
         printToChat(chatId, `>>> SECURE CHANNEL ESTABLISHED WITH: ${getDynamicName(data.partner, chatId)}`, 'system-msg');
-        printToChat(chatId, `>>> TARGET ID: ${chatId}`, 'system-msg');
         printToChat(chatId, '----------------------------------------', 'system-msg');
-
         updateVoiceUI('idle');
-    } else {
-        // Falls was schiefging und wir keinen Key haben (z.B. Reload während Request)
-        if (!myChats[chatId]) {
-            printLine(`Handshake failed for ${data.partner}. Please reconnect.`, 'error-msg');
-        } else {
-            // Wenn Chat schon existiert (z.B. durch Reload), ist alles gut, Key ist im RAM
-            switchChat(chatId);
-        }
     }
 });
 
@@ -2501,6 +2658,84 @@ socket.on('voice_terminated', () => {
     printLine('----------------------------------------', 'error-msg');
 });
 
+// --- HQ EVENTS ---
+
+// 1. Key empfangen (Informant) -> Verschlüsseln & Senden
+socket.on('hq_key_res', async (pubKey) => {
+    if (window.pendingTip) {
+        printLine('Uplink secured. Encrypting payload...', 'system-msg');
+
+        try {
+            const encrypted = await encryptForHq(window.pendingTip, pubKey);
+            socket.emit('hq_send_tip', encrypted);
+            window.pendingTip = null; // Clear
+        } catch (e) {
+            printLine('ENCRYPTION ERROR: ' + e.message, 'error-msg');
+        }
+    }
+});
+
+// AUTH STUFE 1 ERFOLGREICH -> PASSWORT ABFRAGE
+socket.on('auth_step_pass_req', (name) => {
+    appState = 'AUTH_PASS';
+    promptSpan.setAttribute('data-prev-prompt', promptSpan.textContent);
+
+    printLine(' ', '');
+    printLine('----------------------------------------', 'system-msg');
+    printLine(`UPLINK ESTABLISHED: ${name}`, 'success-msg');
+    printLine('IDENTITY VERIFIED. CREDENTIALS REQUIRED.', 'system-msg');
+    printLine('Enter Access Password (or "cancel"):', 'my-msg');
+
+    promptSpan.textContent = 'PASSWORD>';
+    promptSpan.className = 'prompt-warn';
+});
+
+// AUTH STUFE 2 ERFOLGREICH -> 2FA ABFRAGE
+socket.on('auth_step_2fa_req', () => {
+    appState = 'AUTH_2FA';
+
+    printLine(' ', '');
+    printLine('CREDENTIALS ACCEPTED.', 'success-msg');
+    printLine('⚠️  MULTI-FACTOR AUTHENTICATION REQUIRED  ⚠️', 'error-msg');
+    printLine('Enter 6-digit Google Authenticator Code:', 'my-msg');
+
+    promptSpan.textContent = '2FA CODE>';
+    promptSpan.className = 'prompt-error';
+});
+
+// AUTH FEHLGESCHLAGEN (Lockout)
+socket.on('auth_failed', (reason) => {
+    appState = 'IDLE'; // Reset
+    promptSpan.textContent = promptSpan.getAttribute('data-prev-prompt') || '>';
+    promptSpan.className = 'prompt-default';
+
+    printLine(' ', '');
+    printLine('🛑 AUTHENTICATION FAILED 🛑', 'error-msg');
+    printLine(reason, 'error-msg');
+    printLine('Local terminal session has been flagged.', 'system-msg');
+});
+
+// 2. HQ Login Erfolg
+socket.on('hq_login_success', (data) => {
+    window.isHqLoggedIn = true;
+    myUsername = data.username; // Namen überschreiben
+
+    printLine(' ', '');
+    printLine('########################################', 'success-msg');
+    printLine(`WELCOME BACK, ${data.username}.`, 'success-msg');
+    printLine(`INBOX STATUS: ${data.inboxCount} ENCRYPTED REPORTS.`, 'success-msg');
+    printLine('Type "/hq inbox" to open the decryption dashboard.', 'system-msg');
+    printLine('########################################', 'success-msg');
+
+    promptSpan.textContent = 'HQ/COMMAND>';
+    promptSpan.className = 'prompt-error';
+});
+
+// 3. Inbox Daten (HQ)
+socket.on('hq_inbox_data', (inbox) => {
+    if (viewMode === 'INBOX') renderInbox(inbox);
+});
+
 // --- WEBRTC SIGNALING (P2P) ---
 
 const rtcConfig = { iceServers: [{ urls: 'stun:stun.l.google.com:19302' }] };
@@ -3154,6 +3389,238 @@ window.onbeforeunload = () => {
         fileShareWindow.close(); // Nur DIESES Fenster schließen
     }
 };
+
+// =============================================================================
+// 7. SECURITY EXTENSIONS (SAFETY NUMBERS & ROTATION)
+// =============================================================================
+
+// A) Safety Number Berechnung
+async function generateSafetyNumber(myPubKeyString, theirPubKeyString) {
+    if (!myPubKeyString || !theirPubKeyString) return "UNKNOWN-KEY-ERROR";
+    const keys = [myPubKeyString, theirPubKeyString].sort();
+    const combinedData = keys[0] + keys[1];
+    const encoder = new TextEncoder();
+    const data = encoder.encode(combinedData);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    const hashArray = Array.from(new Uint8Array(hashBuffer));
+
+    let numString = "";
+    for (let i = 0; i < 15; i++) { // 15 Bytes für mehr Sicherheit
+        numString += hashArray[i].toString().padStart(3, '0');
+    }
+    return numString.match(/.{1,5}/g).join('-');
+}
+
+// B) Key Rotation Auslöser
+async function performKeyRotation(targetKey) {
+    const chat = myChats[targetKey];
+    if (!chat) return;
+
+    // 1. Neues temporäres KeyPair nur für diese Rotation
+    const newKeyPair = await generateKeyPair();
+    const exportedPub = await exportPublicKey(newKeyPair.publicKey);
+
+    // 2. Wir merken uns diesen Key, bis die Antwort kommt
+    chat.pendingKeyPair = newKeyPair;
+
+    // 3. Signal an Partner senden
+    socket.emit('rekey_signal', {
+        targetKey: targetKey,
+        type: 'request',
+        publicKey: exportedPub
+    });
+}
+
+// C) Key Rotation Listener (Antworten verarbeiten)
+socket.on('rekey_signal_received', async (data) => {
+    const chat = myChats[data.senderKey];
+    if (!chat) return;
+
+    if (data.type === 'request') {
+        printToChat(chat.id, `[SECURITY] Partner initiated Key Rotation. Updating keys...`, 'system-msg');
+
+        // 1. Meinen neuen Key machen
+        const myNewKeyPair = await generateKeyPair();
+        const myExported = await exportPublicKey(myNewKeyPair.publicKey);
+
+        // 2. Seinen Key importieren (für Shared Secret) & speichern (für Safety Number)
+        chat.partnerPublicKeyString = data.publicKey; // Speichern für Safety Number
+        const partnerNewKey = await importPublicKey(data.publicKey); // Importieren für Crypto
+
+        // 3. Neues Secret berechnen
+        const newSecret = await deriveSecretKey(myNewKeyPair.privateKey, data.publicKey);
+
+        // 4. Alles überschreiben
+        chat.key = newSecret;
+        chat.myKeyPair = myNewKeyPair;
+
+        // Meinen Public Key String aktualisieren (für Safety Number)
+        chat.myPublicKeyString = myExported;
+
+        chat.msgCount = 0;
+
+        // 5. Antwort senden
+        socket.emit('rekey_signal', {
+            targetKey: data.senderKey,
+            type: 'response',
+            publicKey: myExported
+        });
+        printToChat(chat.id, `[SECURITY] Rotation complete. Forward Secrecy active.`, 'system-msg');
+
+    } else if (data.type === 'response') {
+        if (!chat.pendingKeyPair) return;
+
+        // 1. Seinen Key importieren & speichern
+        chat.partnerPublicKeyString = data.publicKey;
+        const partnerNewKey = await importPublicKey(data.publicKey);
+
+        // 2. Secret berechnen mit meinem PENDING Key
+        const newSecret = await deriveSecretKey(chat.pendingKeyPair.privateKey, data.publicKey);
+
+        // 3. Speichern
+        chat.key = newSecret;
+        chat.myKeyPair = chat.pendingKeyPair;
+
+        // Meinen Public Key aktualisieren
+        chat.myPublicKeyString = await exportPublicKey(chat.pendingKeyPair.publicKey);
+
+        delete chat.pendingKeyPair;
+        printToChat(chat.id, `[SECURITY] Key Rotation finalized.`, 'system-msg');
+    }
+});
+
+// =============================================================================
+// 8. HQ / SECURE DROP EXTENSIONS (RSA CRYPTO)
+// =============================================================================
+
+// RSA Keypair generieren (Nur für HQ)
+async function generateRsaKeyPair() {
+    return window.crypto.subtle.generateKey(
+        {
+            name: "RSA-OAEP",
+            modulusLength: 2048,
+            publicExponent: new Uint8Array([1, 0, 1]),
+            hash: "SHA-256"
+        },
+        true,
+        ["encrypt", "decrypt"]
+    );
+}
+
+// Nachricht für HQ verschlüsseln (Informant nutzt Public Key)
+async function encryptForHq(text, pubKeyPem) {
+    const pubKey = await importRsaPublicKey(pubKeyPem);
+    const enc = new TextEncoder();
+    const encoded = enc.encode(text);
+
+    const buffer = await window.crypto.subtle.encrypt(
+        { name: "RSA-OAEP" },
+        pubKey,
+        encoded
+    );
+    return arrayBufferToBase64(buffer);
+}
+
+// Nachricht entschlüsseln (HQ nutzt Private Key)
+async function decryptHqMessage(base64Data, privateKey) {
+    try {
+        const buffer = base64ToArrayBuffer(base64Data);
+        const decrypted = await window.crypto.subtle.decrypt(
+            { name: "RSA-OAEP" },
+            privateKey,
+            buffer
+        );
+        const dec = new TextDecoder();
+        return dec.decode(decrypted);
+    } catch (e) {
+        return "[DECRYPTION FAILED]";
+    }
+}
+
+// Helpers
+async function importRsaPublicKey(pem) {
+    // PEM Header entfernen falls nötig, hier vereinfacht für SPKI format
+    const binaryDer = base64ToArrayBuffer(pem);
+    return window.crypto.subtle.importKey(
+        "spki",
+        binaryDer,
+        { name: "RSA-OAEP", hash: "SHA-256" },
+        true,
+        ["encrypt"]
+    );
+}
+function arrayBufferToBase64(buffer) {
+    let binary = '';
+    const bytes = new Uint8Array(buffer);
+    for (let i = 0; i < bytes.byteLength; i++) { binary += String.fromCharCode(bytes[i]); }
+    return window.btoa(binary);
+}
+function base64ToArrayBuffer(base64) {
+    const binary_string = window.atob(base64);
+    const len = binary_string.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) { bytes[i] = binary_string.charCodeAt(i); }
+    return bytes.buffer;
+}
+
+// --- HQ INBOX UI ---
+
+function toggleInboxView() {
+    if (viewMode === 'CHAT') {
+        viewMode = 'INBOX';
+        renderInbox([]); // Erstmal leer rendern
+        socket.emit('hq_fetch_inbox'); // Daten holen
+    } else {
+        viewMode = 'CHAT';
+        // UI Reset code... (siehe toggleBlogView logic)
+        output.innerHTML = '';
+        switchChat(activeChatId);
+    }
+}
+
+async function renderInbox(messages) {
+    output.innerHTML = '';
+
+    const header = document.createElement('div');
+    header.innerHTML = `
+        <div class="blog-header" style="border-color:#f00;">
+            <h2 style="color:#f00; margin:0;">/// CLASSIFIED INTEL INBOX ///</h2>
+            <div style="color:#888;">IDENTITY: MI6-HQ-007</div>
+        </div>
+        <div style="margin:10px 0;">
+            <button class="voice-btn" onclick="toggleInboxView()">[ EXIT DASHBOARD ]</button>
+            <button class="voice-btn" onclick="socket.emit('hq_fetch_inbox')">[ REFRESH ]</button>
+        </div>
+    `;
+    output.appendChild(header);
+
+    const container = document.createElement('div');
+
+    // Wir müssen async map nutzen wegen decrypt
+    for (const msg of messages) {
+        let content = "[ENCRYPTED]";
+        if (window.hqPrivateKey) {
+            content = await decryptHqMessage(msg.content, window.hqPrivateKey);
+        }
+
+        const div = document.createElement('div');
+        div.style.border = "1px solid #333";
+        div.style.margin = "10px 0";
+        div.style.padding = "10px";
+        div.style.background = "rgba(20,0,0,0.5)";
+
+        div.innerHTML = `
+            <div style="display:flex; justify-content:space-between; color:#f00; border-bottom:1px solid #333; padding-bottom:5px;">
+                <span>RECEIVED: ${new Date(msg.timestamp).toLocaleString()}</span>
+                <span onclick="socket.emit('hq_delete_msg', '${msg.id}')" style="cursor:pointer;">[ DELETE ]</span>
+            </div>
+            <div style="padding: 10px; color: #fff; white-space: pre-wrap; font-family: monospace;">${content}</div>
+        `;
+        container.appendChild(div);
+    }
+
+    output.appendChild(container);
+}
 
 // --- INIT ---
 runBootSequence();
