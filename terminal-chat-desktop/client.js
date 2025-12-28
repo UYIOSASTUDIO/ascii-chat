@@ -639,162 +639,164 @@ async function runBootSequence() {
 }
 
 // =============================================================================
-// 4. INPUT & COMMAND HANDLER (PERFORMANCE ENGINE)
+// 4. INPUT & COMMAND HANDLER (FINAL: MOUSE DRAG SUPPORT)
 // =============================================================================
 
+// Funktion: Spiegelbild & Cursor visuell updaten
 function updateMirror() {
-    const inp = document.getElementById("command-input");
-    const mirror = document.getElementById("cmd-mirror");
+    const inp = document.getElementById('command-input');
+    const mir = document.getElementById('cmd-mirror');
 
-    if (!inp || !mirror) return;
+    if (!inp || !mir) return;
 
-    const val = inp.value;
+    const text = inp.value;
 
-    // --- INTELLIGENTE CURSOR POSITION ---
-    let cursorPos = inp.selectionStart;
+    // --- CURSOR POSITION BESTIMMEN ---
+    let caretPos = inp.selectionStart;
 
-    // Regel 1: Wenn wir von Links nach Rechts markieren -> Nimm das Ende
+    // Check: In welche Richtung wurde markiert?
+    // 'forward' = Von Links nach Rechts -> Cursor muss ans Ende (Rechts)
+    // 'backward' oder 'none' = Von Rechts nach Links -> Cursor muss an den Anfang (Links)
     if (inp.selectionDirection === 'forward') {
-        cursorPos = inp.selectionEnd;
+        caretPos = inp.selectionEnd;
     }
 
-    // Regel 2 (Der Cmd+A Fix): Wenn ALLES markiert ist, setze Cursor ans Ende
-    if (inp.selectionStart === 0 && inp.selectionEnd === val.length && val.length > 0) {
-        cursorPos = inp.selectionEnd;
+    // Text aufteilen
+    const left = text.slice(0, caretPos);
+    let current = text.slice(caretPos, caretPos + 1);
+    const right = text.slice(caretPos + 1);
+
+    // Cursor-Block Logik (Leere Zeichen / Zeilenumbrüche abfangen)
+    if (current === '' || current === '\n') {
+        if (current === '\n') {
+            current = ' \n'; // Block + Zeilenumbruch rendern
+        } else {
+            current = ' '; // Leerer Block am Ende
+        }
     }
-    // ------------------------------------
 
-    // HTML Bauen
-    const left = val.slice(0, cursorPos);
-    const charAtCursor = val.charAt(cursorPos) || ' ';
-    const right = val.slice(cursorPos + 1);
+    // HTML Safe machen
+    const escape = (str) => str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-    const escapeHTML = (str) => str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+    // Rendern
+    mir.innerHTML = escape(left) +
+        `<span class="cursor-block">${escape(current)}</span>` +
+        escape(right);
 
-    const cursorHTML = `<span class="cursor-block">${escapeHTML(charAtCursor)}</span>`;
-    mirror.innerHTML = escapeHTML(left) + cursorHTML + escapeHTML(right);
+    // Sync Scroll
+    mir.scrollTop = inp.scrollTop;
 }
 
 // Event Listeners aktivieren
 const inputField = document.getElementById('command-input');
-
 if (inputField) {
+    // WICHTIG: Hier sind jetzt 'mousemove', 'mouseup' und 'select' dabei!
+    // Das sorgt dafür, dass der Cursor auch WÄHREND des Markierens mit der Maus live wandert.
+    const events = ['input', 'keydown', 'keyup', 'click', 'scroll', 'focus', 'mousedown', 'mouseup', 'mousemove', 'select'];
 
-    // --- A) DER SMART RENDER LOOP (VISUALS) ---
-    // Ersetzt alle mousemove/click/select Events für maximale Performance
-    let lastState = { val: '', start: -1, end: -1, dir: '' };
+    events.forEach(evt => {
+        inputField.addEventListener(evt, (e) => {
+            if (evt === 'mousemove' && e.buttons !== 1) return;
 
-    function cursorLoop() {
-        if (document.activeElement === inputField) {
-            const currentVal = inputField.value;
-            const currentStart = inputField.selectionStart;
-            const currentEnd = inputField.selectionEnd;
-            const currentDir = inputField.selectionDirection;
+            // A) Auto-Grow
+            inputField.style.height = 'auto';
+            inputField.style.height = (inputField.scrollHeight) + 'px';
+            if (inputField.value === '') inputField.style.height = 'auto';
 
-            const hasChanged =
-                currentVal !== lastState.val ||
-                currentStart !== lastState.start ||
-                currentEnd !== lastState.end ||
-                currentDir !== lastState.dir;
+            // B) Visual Update
+            updateMirror();
 
-            if (hasChanged) {
-                updateMirror();
-                lastState = { val: currentVal, start: currentStart, end: currentEnd, dir: currentDir };
-            }
-        }
-        requestAnimationFrame(cursorLoop);
-    }
-    cursorLoop(); // Starten
-
-    // --- B) INPUT EVENT (LOGIK: Auto-Grow & History Reset) ---
-    inputField.addEventListener('input', (e) => {
-        // Auto-Grow
-        inputField.style.height = 'auto';
-        inputField.style.height = (inputField.scrollHeight) + 'px';
-        if (inputField.value === '') inputField.style.height = 'auto';
-
-        // History Reset (nur beim Chatten)
-        if (e.isTrusted && viewMode !== 'BLOG') {
-            historyIndex = commandHistory.length;
-        }
-
-        // Live Search für Blog
-        if (viewMode === 'BLOG') {
-            filterBlogPosts(inputField.value);
-        }
-    });
-
-    // --- C) KEYDOWN EVENT (AKTIONEN: Senden & History) ---
-    inputField.addEventListener('keydown', async (e) => {
-
-        // BLOG SEARCH MODE: Enter blockieren (Suche ist live)
-        if (viewMode === 'BLOG') {
-            if (e.key === 'Enter') e.preventDefault();
-            return;
-        }
-
-        // SENDEN (Enter)
-        if (e.key === 'Enter' && !e.shiftKey) {
-            e.preventDefault();
-
-            // INBOX INPUT SPERREN
-            if (activeChatId === 'HQ_INBOX') return;
-
-            const val = inputField.value.trim();
-            if (val) {
-                commandHistory.push(val);
+            // C) History Reset (nur beim Chatten)
+            if (evt === 'input' && e.isTrusted && viewMode !== 'BLOG') {
                 historyIndex = commandHistory.length;
-
-                inputField.value = '';
-                inputField.style.height = 'auto';
-
-                // Wir erzwingen ein Update für den Loop
-                lastState.val = '';
-                updateMirror();
-
-                if (!appState.startsWith('DECIDING')) {
-                    // Echo lokal
-                    const safeVal = val.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-                    const displayVal = safeVal.replace(/\n/g, '<br>');
-                    printLine(`> ${displayVal}`, 'my-msg');
-                }
-                await handleInput(val);
-            } else {
-                inputField.value = '';
-                updateMirror();
             }
-        }
-        // HISTORY HOCH
-        else if (e.key === 'ArrowUp') {
-            if (inputField.value === '' || historyIndex !== commandHistory.length) {
-                if (historyIndex > 0) {
-                    e.preventDefault();
-                    historyIndex--;
-                    inputField.value = commandHistory[historyIndex];
-                    // Cursor ans Ende setzen (Trick für den Loop)
-                    setTimeout(() => {
-                        inputField.selectionStart = inputField.selectionEnd = inputField.value.length;
-                    }, 0);
-                }
+
+            // --- D) NEU: LIVE SEARCH FÜR BLOG ---
+            if (viewMode === 'BLOG' && evt === 'input') {
+                filterBlogPosts(inputField.value);
             }
-        }
-        // HISTORY RUNTER
-        else if (e.key === 'ArrowDown') {
-            if (inputField.value === '' || historyIndex !== commandHistory.length) {
-                if (historyIndex < commandHistory.length - 1) {
-                    historyIndex++;
-                    inputField.value = commandHistory[historyIndex];
-                } else {
-                    historyIndex = commandHistory.length;
-                    inputField.value = '';
-                }
-            }
-        }
+            // ------------------------------------
+        });
     });
 
     // Initialer Aufruf
     setTimeout(updateMirror, 100);
 }
+
+// ENTER & HISTORY LOGIK
+inputField.addEventListener('keydown', async (e) => {
+    // SENDEN (Enter)
+
+    // --- NEU: BLOCKIEREN WENN IM BLOG MODUS ---
+    if (viewMode === 'BLOG') {
+        // Pfeiltasten für History erlauben wir hier nicht, Enter macht nichts (Suche ist live)
+        // Wir verhindern nur das Absenden an den Chat
+        if (e.key === 'Enter') e.preventDefault();
+        return;
+    }
+
+    if (e.key === 'Enter' && !e.shiftKey) {
+        e.preventDefault();
+
+        // --- FIX: INBOX INPUT SPERREN ---
+        // Wenn wir in der Inbox sind, ist Enter verboten (nur Suche erlaubt)
+        if (activeChatId === 'HQ_INBOX') {
+            return;
+        }
+        // --------------------------------
+
+        const val = inputField.value.trim();
+        if (val) {
+            commandHistory.push(val);
+            historyIndex = commandHistory.length;
+
+            inputField.value = '';
+            inputField.style.height = 'auto';
+            updateMirror();
+
+            if (!appState.startsWith('DECIDING')) {
+                // Eigene Nachricht lokal anzeigen (Echo)
+                const safeVal = val.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+                const displayVal = safeVal.replace(/\n/g, '<br>');
+                printLine(`> ${displayVal}`, 'my-msg');
+            }
+            await handleInput(val);
+        } else {
+            inputField.value = '';
+            updateMirror();
+        }
+    }
+    // HISTORY HOCH
+    else if (e.key === 'ArrowUp') {
+        if (inputField.value === '' || historyIndex !== commandHistory.length) {
+            if (historyIndex > 0) {
+                e.preventDefault();
+                historyIndex--;
+                inputField.value = commandHistory[historyIndex];
+                setTimeout(() => {
+                    inputField.selectionStart = inputField.selectionEnd = inputField.value.length;
+                    // Event triggern für Update
+                    inputField.dispatchEvent(new Event('input', { bubbles: true }));
+                }, 0);
+            }
+        }
+    }
+    // HISTORY RUNTER
+    else if (e.key === 'ArrowDown') {
+        if (inputField.value === '' || historyIndex !== commandHistory.length) {
+            if (historyIndex < commandHistory.length - 1) {
+                historyIndex++;
+                inputField.value = commandHistory[historyIndex];
+            } else {
+                historyIndex = commandHistory.length;
+                inputField.value = '';
+            }
+            setTimeout(() => {
+                inputField.dispatchEvent(new Event('input', { bubbles: true }));
+            }, 0);
+        }
+    }
+});
 
 async function handleInput(text) {
     if (appState === 'BOOTING') {
@@ -1225,36 +1227,36 @@ async function handleInput(text) {
                 delete pendingRequests[targetKey];
             }
         }
-     // Universeller LEAVE Befehl
-     else if (cmd === '/leave') {
-         const currentChat = myChats[activeChatId];
+        // Universeller LEAVE Befehl
+        else if (cmd === '/leave') {
+            const currentChat = myChats[activeChatId];
 
-         if (currentChat.type === 'private') {
-             // 1. Voice Check: Sind wir im Call mit diesem Chat?
-             if (currentVoiceTarget === currentChat.id) {
-                 printLine('>>> TERMINATING AUDIO UPLINK BEFORE EXIT...', 'error-msg');
-                 // Wir senden ein Hangup-Signal und stoppen lokal
-                 socket.emit('voice_hangup', { targetKey: currentChat.id });
-                 endAudioStream();
-                 currentVoiceTarget = null;
-             }
+            if (currentChat.type === 'private') {
+                // 1. Voice Check: Sind wir im Call mit diesem Chat?
+                if (currentVoiceTarget === currentChat.id) {
+                    printLine('>>> TERMINATING AUDIO UPLINK BEFORE EXIT...', 'error-msg');
+                    // Wir senden ein Hangup-Signal und stoppen lokal
+                    socket.emit('voice_hangup', { targetKey: currentChat.id });
+                    endAudioStream();
+                    currentVoiceTarget = null;
+                }
 
-             // 2. Chat verlassen
-             printLine('Terminating secure connection...', 'system-msg');
-             socket.emit('private_leave', currentChat.id);
-         }
-         else if (currentChat.type === 'group') {
-             printLine('Leaving group...', 'system-msg');
-             socket.emit('group_leave');
-         }
-         else if (currentChat.type === 'pub') {
-             printLine('Disconnecting from sector...', 'system-msg');
-             socket.emit('pub_leave');
-         }
-         else {
-             printLine('ERROR: Nothing to leave here (LOCAL mode).', 'error-msg');
-         }
-     }
+                // 2. Chat verlassen
+                printLine('Terminating secure connection...', 'system-msg');
+                socket.emit('private_leave', currentChat.id);
+            }
+            else if (currentChat.type === 'group') {
+                printLine('Leaving group...', 'system-msg');
+                socket.emit('group_leave');
+            }
+            else if (currentChat.type === 'pub') {
+                printLine('Disconnecting from sector...', 'system-msg');
+                socket.emit('pub_leave');
+            }
+            else {
+                printLine('ERROR: Nothing to leave here (LOCAL mode).', 'error-msg');
+            }
+        }
         // --- WHISPER COMMAND (ENCRYPTED) ---
         else if (cmd === '/whisper') {
             // Format: /whisper [TARGET_KEY] [MESSAGE]
@@ -1346,26 +1348,26 @@ async function handleInput(text) {
             }
         }
 
-     // --- ADMIN BAN HAMMER ---
-     else if (cmd === '/ban') {
-         const targets = args.slice(1); // Alle IDs nach /ban
-         if (targets.length > 0) {
-             printLine(`Initializing ban protocol for ${targets.length} targets...`, 'system-msg');
-             socket.emit('admin_ban', targets);
-         } else {
-             printLine('USAGE: /ban [ID] [ID] ...', 'error-msg');
-         }
-     }
+        // --- ADMIN BAN HAMMER ---
+        else if (cmd === '/ban') {
+            const targets = args.slice(1); // Alle IDs nach /ban
+            if (targets.length > 0) {
+                printLine(`Initializing ban protocol for ${targets.length} targets...`, 'system-msg');
+                socket.emit('admin_ban', targets);
+            } else {
+                printLine('USAGE: /ban [ID] [ID] ...', 'error-msg');
+            }
+        }
 
-     // --- ADMIN GLOBAL BROADCAST ---
-     else if (cmd === '/broadcast') {
-         const msg = args.slice(1).join(' ');
-         if (msg) {
-             socket.emit('admin_broadcast', msg);
-         } else {
-             printLine('USAGE: /broadcast [MESSAGE]', 'error-msg');
-         }
-     }
+        // --- ADMIN GLOBAL BROADCAST ---
+        else if (cmd === '/broadcast') {
+            const msg = args.slice(1).join(' ');
+            if (msg) {
+                socket.emit('admin_broadcast', msg);
+            } else {
+                printLine('USAGE: /broadcast [MESSAGE]', 'error-msg');
+            }
+        }
         else if (cmd === '/ping') {
             socket.emit('ping_request', args[1] || '');
         }
@@ -1375,47 +1377,47 @@ async function handleInput(text) {
         else if (cmd === '/info') {
             socket.emit('info_request', args[1]);
         }
-     else if (cmd === '/safety') {
-         if (!activeChatId || activeChatId === 'LOCAL' || myChats[activeChatId].type !== 'private') {
-             printLine("ERROR: Safety Numbers are only available in private P2P chats.", "error-msg");
-             return;
-         }
+        else if (cmd === '/safety') {
+            if (!activeChatId || activeChatId === 'LOCAL' || myChats[activeChatId].type !== 'private') {
+                printLine("ERROR: Safety Numbers are only available in private P2P chats.", "error-msg");
+                return;
+            }
 
-         const chat = myChats[activeChatId];
-         // Wir generieren die Nummer aus den gespeicherten Strings
-         const safetyNum = await generateSafetyNumber(chat.myPublicKeyString, chat.partnerPublicKeyString);
+            const chat = myChats[activeChatId];
+            // Wir generieren die Nummer aus den gespeicherten Strings
+            const safetyNum = await generateSafetyNumber(chat.myPublicKeyString, chat.partnerPublicKeyString);
 
-         printLine("------------------------------------------------", "system-msg");
-         printLine("🔐 SECURITY FINGERPRINT (SAFETY NUMBER)", "success-msg");
-         printLine("Compare this number with your partner (e.g. via Phone):", "system-msg");
-         printLine(safetyNum, "highlight-msg");
-         printLine("If it matches, the connection is secure (No Man-in-the-Middle).", "system-msg");
-         printLine("------------------------------------------------", "system-msg");
-     }
-    // --- GHOST MODE ---
-    else if (cmd === '/ghost') {
-        printLine('Initiating Stealth Protocols...', 'system-msg');
-        socket.emit('toggle_ghost');
-    }
+            printLine("------------------------------------------------", "system-msg");
+            printLine("🔐 SECURITY FINGERPRINT (SAFETY NUMBER)", "success-msg");
+            printLine("Compare this number with your partner (e.g. via Phone):", "system-msg");
+            printLine(safetyNum, "highlight-msg");
+            printLine("If it matches, the connection is secure (No Man-in-the-Middle).", "system-msg");
+            printLine("------------------------------------------------", "system-msg");
+        }
+        // --- GHOST MODE ---
+        else if (cmd === '/ghost') {
+            printLine('Initiating Stealth Protocols...', 'system-msg');
+            socket.emit('toggle_ghost');
+        }
 
-     // --- GHOST SCANNER ---
-     else if (cmd === '/scan') {
-         printLine('Initiating spectral scan...', 'system-msg');
-         socket.emit('ghost_scan_req');
-     }
+        // --- GHOST SCANNER ---
+        else if (cmd === '/scan') {
+            printLine('Initiating spectral scan...', 'system-msg');
+            socket.emit('ghost_scan_req');
+        }
 
         else if (cmd === '/group') {
             const sub = args[1];
-             if (sub === 'create') {
-                 // Wir nehmen alle Wörter nach 'create' und bauen sie zu einem String zusammen
-                 const groupName = args.slice(2).join(' ');
+            if (sub === 'create') {
+                // Wir nehmen alle Wörter nach 'create' und bauen sie zu einem String zusammen
+                const groupName = args.slice(2).join(' ');
 
-                 // Wir senden jetzt ein Objekt an den Server (wie vorhin besprochen)
-                 socket.emit('group_create', {
-                     name: groupName,
-                     invites: [] // Invites lassen wir hier leer, dafür gibt es /group invite
-                 });
-             }
+                // Wir senden jetzt ein Objekt an den Server (wie vorhin besprochen)
+                socket.emit('group_create', {
+                    name: groupName,
+                    invites: [] // Invites lassen wir hier leer, dafür gibt es /group invite
+                });
+            }
             else if (sub === 'join') socket.emit('group_join_req', args[2]);
             else if (sub === 'leave') socket.emit('group_leave');
             else // --- KICK BEFEHL (Preview Update) ---
@@ -1492,15 +1494,15 @@ async function handleInput(text) {
                 }
             }
         }
-     // --- MOD SHORTCUT ---
-     else if (cmd === '/mod') {
-         if (args[1]) {
-             // FIX: Sende an 'group_user_promote' statt 'group_promote'
-             socket.emit('group_user_promote', args[1]);
-         } else {
-             printLine('USAGE: /mod [USER_KEY]', 'error-msg');
-         }
-     }
+        // --- MOD SHORTCUT ---
+        else if (cmd === '/mod') {
+            if (args[1]) {
+                // FIX: Sende an 'group_user_promote' statt 'group_promote'
+                socket.emit('group_user_promote', args[1]);
+            } else {
+                printLine('USAGE: /mod [USER_KEY]', 'error-msg');
+            }
+        }
         else if (cmd === '/pub') {
             const sub = args[1];
             if (sub === 'create') socket.emit('pub_create', args.slice(2).join(' '));
@@ -1630,15 +1632,15 @@ async function handleInput(text) {
             }
         }
 
-     else if (cmd === '/help') {
-         printLine('COMMANDS: /connect, /group, /pub, /drop, /ping, /nudge, /info, /auth, /ghost, /leave', 'system-msg');
-     }
+        else if (cmd === '/help') {
+            printLine('COMMANDS: /connect, /group, /pub, /drop, /ping, /nudge, /info, /auth, /ghost, /leave', 'system-msg');
+        }
 
-     // --- NEU: UNBEKANNTER BEFEHL ---
-     else {
-         printLine(`ERROR: Unknown command '${cmd}'.`, 'error-msg');
-         printLine('Type /help for a list of available protocols.', 'system-msg');
-     }
+        // --- NEU: UNBEKANNTER BEFEHL ---
+        else {
+            printLine(`ERROR: Unknown command '${cmd}'.`, 'error-msg');
+            printLine('Type /help for a list of available protocols.', 'system-msg');
+        }
 
         return; // WICHTIG: Damit der Befehl nicht als Chat-Nachricht gesendet wird!
     }

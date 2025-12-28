@@ -11,7 +11,7 @@
     --accent-dim: rgba(74, 246, 38, 0.15);
 
     /* Rahmen */
-    --border-color: rgba(255, 255, 255, 0.25);
+    --border-color: rgba(255, 255, 255, 0.12);
     --border-thick: 1px solid var(--border-color);
 
     --font-stack: 'Fira Code', 'Courier New', monospace;
@@ -106,11 +106,8 @@ html, body {
     display: flex;          /* Flexbox für vertikale Aufteilung (Promo / Voice) */
     flex-direction: column;
     height: 100%;
-    oborder-right: var(--border-thick);
-    position: relative;
-    z-index: 5; /* Liegt jetzt unter dem Resizer (z-index 100), aber Border ist im Box-Model */
-    background-color: var(--panel-bg);
     overflow: hidden;
+    background-color: var(--panel-bg);
 }
 
 /* --- DIE "GRIFFE" (RESIZER) --- */
@@ -309,12 +306,13 @@ html, body {
 }
 
 #command-input, #cmd-mirror {
+    /* Beide Elemente liegen in derselben Grid-Zelle */
     grid-area: 1 / 1;
 
     width: 100%;
     font-family: inherit;
     font-size: 1.1em;
-    line-height: 1.5;
+    line-height: 1.5;    /* Muss identisch zum Prompt sein */
     padding: 0;
     margin: 0;
     border: none;
@@ -323,20 +321,14 @@ html, body {
     white-space: pre-wrap;
     word-wrap: break-word;
     overflow-wrap: break-word;
-    text-indent: 0;
-
-    /* WICHTIG: Beide bekommen exakt denselben Platz-Abzug rechts */
-    /* Das reserviert Platz für die Scrollbar bei BEIDEN, damit der Text synchron bleibt */
-    padding-right: 10px;
 
     max-height: 200px;
 }
 
-/* DAS EINGABEFELD */
 #command-input {
     z-index: 2;
-    color: transparent;
-    caret-color: transparent;
+    color: transparent; /* Text unsichtbar für Custom Caret Effekt */
+    caret-color: transparent; /* Standard Cursor weg */
     outline: none;
     resize: none;
     overflow-y: auto;
@@ -351,8 +343,7 @@ html, body {
     color: var(--text-main);
     pointer-events: none;
     overflow: hidden;
-    min-height: 1.5em;
-    /* KEIN extra padding-right hier mehr, da es jetzt oben für beide definiert ist */
+    min-height: 1.5em; /* Damit die Zeile auch leer eine Höhe hat */
 }
 
 /* Platzhalter Style */
@@ -365,14 +356,12 @@ html, body {
 #command-input:focus::selection { background: rgba(74, 246, 38, 0.3); color: transparent; }
 
 .cursor-block {
-    display: inline; /* WICHTIG: Inline statt inline-block verhindert den Umbruch! */
+    display: inline-block;
+    min-width: 0.6em;
+    white-space: pre-wrap;
+    animation: blink 1s step-end infinite;
     background-color: var(--accent-color);
     color: #000;
-    white-space: pre-wrap; /* Leerzeichen im Cursor behalten */
-    animation: blink 1s step-end infinite;
-
-    /* Damit er auch bei leeren Zeilen eine Höhe hat */
-    line-height: inherit;
 }
 
 /* PANELS */

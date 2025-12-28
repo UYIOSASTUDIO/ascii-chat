@@ -1,0 +1,128 @@
+<!DOCTYPE html>
+<html lang="de">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SECURE FILE SYSTEM</title>
+    <link rel="stylesheet" href="fileshare.css">
+</head>
+<body>
+
+<header>
+    <div class="header-title">/// SECURE_FILE_SYSTEM</div>
+    <button class="back-btn" onclick="window.close()">CLOSE_SYSTEM</button>
+</header>
+
+<div class="main-container">
+
+    <aside class="sidebar">
+
+        <div class="mount-controls">
+            <button id="btnMount" class="btn-mount" onclick="triggerMount()">
+                [+] MOUNT LOCAL DRIVE
+            </button>
+            <button id="btnEdit" class="btn-mount" onclick="triggerEdit()" style="display:none; margin-bottom: 5px;">[*] EDIT CONFIG</button>
+            <button id="btnUnmount" class="btn-mount btn-danger" onclick="unmountDrive()" style="display:none;">
+                [-] UNMOUNT DRIVE
+            </button>
+        </div>
+
+        <div class="sidebar-header">NETWORK DRIVES</div>
+
+        <input type="text" id="driveSearch" placeholder="> Search Drive, User or ID..." autocomplete="off">
+
+        <ul class="share-list" id="shareList">
+            <li style="padding:15px; color:#555; font-size:0.8em; text-align:center;">
+                Waiting for signal...
+            </li>
+        </ul>
+
+    </aside>
+
+    <section class="content-area">
+
+        <div id="folderActions" style="padding: 10px 20px; display:none; border-bottom: 1px solid #333;">
+            <button id="btnZipDownload" class="btn-action" style="width:auto; font-size:0.9em;">
+                [ DOWNLOAD CURRENT FOLDER AS .ZIP ]
+            </button>
+        </div>
+
+        <div id="fileGrid" class="file-grid">
+            <div class="empty-state">
+                &lt; SELECT A DRIVE TO MOUNT &gt;
+            </div>
+        </div>
+
+        <div id="filePreview" class="preview-pane" style="display:none;">
+            <div class="preview-toolbar">
+                <button class="btn-action" onclick="downloadCurrentFile()">[ DOWNLOAD ]</button>
+                <span id="previewFileName" style="padding-top:5px;">filename.txt</span>
+                <button class="btn-action btn-close" onclick="closePreview()">[ X ] CLOSE</button>
+            </div>
+            <div id="previewContent" class="preview-content"></div>
+        </div>
+
+        <div class="breadcrumb-bar" id="breadcrumbs">
+            ROOT <span class="separator">></span>
+        </div>
+    </section>
+
+</div>
+
+<div id="mountModal" class="modal-overlay" style="display:none;">
+    <div class="modal-window">
+        <h3 id="modalTitle">MOUNT CONFIGURATION</h3>
+
+        <div class="form-group">
+            <label>DISPLAY NAME:</label>
+            <input type="text" id="mountName" placeholder="e.g. Project Omega">
+        </div>
+
+        <div class="form-group">
+            <label>ALLOWED USERS (IDs comma separated, empty = ALL):</label>
+            <input type="text" id="mountAllowedUsers" placeholder="ID1, ID2...">
+        </div>
+
+        <div class="form-group">
+            <label>ALLOWED GROUPS (Select to share with entire group):</label>
+            <div id="groupListContainer" class="group-select-container">
+                <span style="color:#555; font-size:0.8em;">Loading groups...</span>
+            </div>
+        </div>
+
+        <div class="form-group">
+            <label>PASSWORD PROTECTION (Optional):</label>
+            <input type="password" id="mountPassword" placeholder="Leave empty for no password">
+        </div>
+
+        <div class="form-group" id="fileSelectionArea">
+            <label>SELECT FOLDER / FILE:</label>
+            <button class="btn-action" onclick="document.getElementById('hiddenFolderInput').click()">[ CHOOSE CONTENT ]</button>
+            <span id="selectedFolderName" style="margin-left:10px; color:#555;">No content selected</span>
+            <input type="file" id="hiddenFolderInput" webkitdirectory directory multiple hidden>
+        </div>
+
+        <div class="modal-actions">
+            <button class="btn-mount btn-danger" onclick="closeMountModal()">CANCEL</button>
+            <button id="btnConfirmMount" class="btn-mount" onclick="confirmMount()">[ MOUNT DRIVE ]</button>
+        </div>
+    </div>
+</div>
+
+<div id="passwordModal" class="modal-overlay" style="display:none;">
+    <div class="modal-window">
+        <h3>SECURE FOLDER ACCESS</h3>
+        <p>This drive is password protected.</p>
+        <input type="password" id="accessPassword" placeholder="Enter Password">
+        <div class="modal-actions">
+            <button class="btn-mount btn-danger" onclick="closePasswordModal()">CANCEL</button>
+            <button class="btn-mount" onclick="submitPassword()">[ UNLOCK ]</button>
+        </div>
+    </div>
+</div>
+
+<script src="./jszip.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="fileshare.js"></script>
+</body>
+</html>

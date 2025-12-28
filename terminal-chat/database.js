@@ -63,13 +63,14 @@ async function initDB() {
     await db.exec(`
         CREATE TABLE IF NOT EXISTS system_blogs (
                                                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                    title TEXT,                     -- NEU
+                                                    title TEXT,
                                                     content TEXT NOT NULL,
                                                     author_tag TEXT NOT NULL,
                                                     author_name TEXT NOT NULL,
-                                                    tags TEXT,                      -- Speichern wir als JSON-String
-                                                    attachment_data TEXT,           -- Speichern wir als JSON-String (Pfad, Größe, Name)
-                                                    is_important INTEGER DEFAULT 0, -- 0 oder 1
+                                                    tags TEXT,
+                                                    attachment_data TEXT,
+                                                    is_important INTEGER DEFAULT 0,
+                                                    password TEXT,                  -- <--- NEU: HIER SPEICHERN WIR DAS PASSWORT
                                                     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     `);
@@ -201,44 +202,73 @@ async function updateInstitutionDescription(tag, newDescription) {
 
 // --- BLOG / SYSTEM LOGS ---
 
-// 1. Erweitertes Erstellen
+// 1. Erstellen (Jetzt mit Passwort)
 async function createBlogPost(data) {
-    // data ist ein Objekt mit allen Infos
     await db.run(`
-        INSERT INTO system_blogs (title, content, author_tag, author_name, tags, attachment_data, is_important) 
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+        INSERT INTO system_blogs (title, content, author_tag, author_name, tags, attachment_data, is_important, password)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
     `, [
         data.title,
         data.content,
         data.authorTag,
         data.authorName,
-        JSON.stringify(data.tags || []),            // Array zu String
-        JSON.stringify(data.attachment || null),    // Objekt zu String
-        data.important ? 1 : 0
+        JSON.stringify(data.tags || []),
+        JSON.stringify(data.attachment || null),
+        data.important ? 1 : 0,
+        data.password || null // <--- Passwort speichern
     ]);
 }
 
-// 2. Abrufen (muss JSON parsen)
+// 2. Abrufen (Passwort mitladen)
 async function getBlogPosts() {
     const rows = await db.all("SELECT * FROM system_blogs ORDER BY id DESC LIMIT 50");
-    // Wir müssen die JSON-Strings wieder in Objekte umwandeln, damit der Client sie versteht
     return rows.map(row => ({
-        ...row,
+        id: row.id,
+        title: row.title,
+        content: row.content,
+        author: row.author_name,
+        author_tag: row.author_tag,
         tags: JSON.parse(row.tags || '[]'),
         attachment: JSON.parse(row.attachment_data || 'null'),
-        important: row.is_important === 1
+        important: row.is_important === 1,
+        password: row.password, // <--- WICHTIG für den Server-Check
+        timestamp: row.created_at
     }));
 }
 
-// 3. Einzeln holen (für Lösch-Check)
+// 3. Einzeln holen
 async function getBlogPostById(id) {
     const row = await db.get("SELECT * FROM system_blogs WHERE id = ?", [id]);
     if (!row) return null;
     return {
-        ...row,
+        id: row.id,
+        title: row.title,
+        content: row.content,
+        author: row.author_name,
+        author_tag: row.author_tag,
         tags: JSON.parse(row.tags || '[]'),
-        attachment: JSON.parse(row.attachment_data || 'null')
+        attachment: JSON.parse(row.attachment_data || 'null'),
+        important: row.is_important === 1,
+        password: row.password, // <--- Auch hier
+        timestamp: row.created_at
     };
+}
+
+// 5. Update (Passwort auch updaten)
+async function updateBlogPost(id, data) {
+    await db.run(`
+        UPDATE system_blogs 
+        SET title = ?, content = ?, tags = ?, attachment_data = ?, is_important = ?, password = ?
+        WHERE id = ?
+    `, [
+        data.title,
+        data.content,
+        JSON.stringify(data.tags || []),
+        JSON.stringify(data.attachment || null),
+        data.important ? 1 : 0,
+        data.password || null, // <--- Update
+        id
+    ]);
 }
 
 // 4. Löschen
@@ -266,5 +296,6 @@ module.exports = {
     createBlogPost,
     getBlogPosts,
     getBlogPostById,
-    deleteBlogPost
+    deleteBlogPost,
+    updateBlogPost
 };

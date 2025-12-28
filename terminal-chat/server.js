@@ -495,46 +495,82 @@ io.on('connection', (socket) => {
 
             users[socket.id].institution = {
                 tag: inst.tag,
+                name: inst.name,
                 color: inst.color,
-                // ACHTUNG: Inbox File Name kommt jetzt aus DB
                 inboxFile: inst.inbox_file
             };
 
-            // Name Logik (bleibt gleich wie vorher)
+            // Name Logik
             if (!users[socket.id].originalName) {
                 users[socket.id].originalName = users[socket.id].username;
             }
             const newName = `[${inst.tag}] ${users[socket.id].originalName}`;
             users[socket.id].username = newName;
 
+            // --- DEM INTERNEN RAUM BEITRETEN ---
+            const internalRoom = `INTERNAL_${inst.tag}`;
+            socket.join(internalRoom);
+            serverLog(`[INTERNAL] ${users[socket.id].username} joined channel ${internalRoom}`);
+
             // Inbox laden
             let inbox = [];
-            const inboxPath = path.join(DATA_DIR, inst.inbox_file); // inst.inbox_file nutzen!
+            const inboxPath = path.join(DATA_DIR, inst.inbox_file);
             if (fs.existsSync(inboxPath)) {
                 try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
             }
 
-            // Private Key müssen wir noch generieren oder aus DB holen
-            // VORERST: Generieren wir ihn neu oder nutzen den fixen Server-Key
-            // Für den Anfang generieren wir ihn on-the-fly, da wir ihn nicht in der DB speichern wollen (Sicherheit!)
-            // Später können wir ihn verschlüsselt in der DB ablegen.
-            const tempPrivKey = inst.keys ? inst.keys.priv : ""; // Fallback
+            const tempPrivKey = inst.keys ? inst.keys.priv : "";
 
+            // 1. ERST LOGIN BESTÄTIGEN (Damit Client den Chat erstellt)
             socket.emit('hq_login_success', {
                 id: session.targetId,
                 username: newName,
                 inboxCount: inbox.length,
-
-                // --- NEU: ECHTER KEY AUS DER DB ---
                 privateKey: inst.private_key
-                // ---------------------------------
             });
 
             socket.join(`HQ_${session.targetId}`);
             serverLog(`[SECURITY] AUTH SUCCESS: ${users[socket.id].originalName} is active as ${session.targetId}.`);
 
-            // Broadcast Update
+            // 2. STATUS UPDATE AN ALLE (Institution Tag setzen)
             broadcastInstitutionUpdate(socket.id);
+
+            // --- 3. FIX: JETZT ERST DIE SYSTEM-NACHRICHTEN SENDEN ---
+            // Wir nutzen setTimeout, um sicherzugehen, dass der Client den Chat fertig gebaut hat.
+
+            setTimeout(() => {
+                // A) Liste der Aktiven berechnen
+                const roomMembersSet = io.sockets.adapter.rooms.get(internalRoom);
+                let onlineNames = [];
+
+                if (roomMembersSet) {
+                    roomMembersSet.forEach(memberSocketId => {
+                        const memberUser = users[memberSocketId];
+                        if (memberUser) {
+                            // Wir nehmen den Originalnamen, das liest sich besser in der Liste
+                            onlineNames.push(memberUser.originalName || memberUser.username);
+                        }
+                    });
+                }
+
+                // B) NACHRICHT AN MICH: Wer ist schon da?
+                socket.emit('hq_internal_msg_rcv', {
+                    sender: 'SYSTEM',
+                    text: `ONLINE AGENTS: [ ${onlineNames.join(', ')} ]`,
+                    tag: 'SYS',
+                    color: '#ffff00' // Gelb
+                });
+
+                // C) NACHRICHT AN DIE KOLLEGEN: Ich bin jetzt da! (Das wolltest du)
+                socket.to(internalRoom).emit('hq_internal_msg_rcv', {
+                    sender: 'SYSTEM',
+                    text: `AGENT CONNECTED: ${users[socket.id].originalName}`,
+                    tag: 'SYS',
+                    color: '#00ff00' // Grün
+                });
+
+            }, 500); // 500ms Verzögerung
+            // -----------------------------------------------------------
 
         } else {
             socket.emit('system_message', 'ERROR: Invalid 2FA Code.');
@@ -655,6 +691,29 @@ io.on('connection', (socket) => {
 
         // Bestätigung an den Sender
         socket.emit('system_message', `>>> BROADCAST SENT TO ALL SECTORS.`);
+    });
+
+    // --- HQ INTERNAL CHAT (SQUAD COMMS) ---
+
+    socket.on('hq_internal_chat', (msg) => {
+        const user = users[socket.id];
+
+        // 1. Sicherheits-Check
+        if (!user || !user.institution) {
+            return socket.emit('system_message', 'ACCESS DENIED: No institutional clearance.');
+        }
+
+        // 2. Raum bestimmen
+        const internalRoom = `INTERNAL_${user.institution.tag}`;
+
+        // 3. Nachricht an alle ANDEREN im Raum senden (Sender ausgeschlossen)
+        // ÄNDERUNG: 'socket.to' statt 'io.to'
+        socket.to(internalRoom).emit('hq_internal_msg_rcv', {
+            sender: user.originalName || user.username,
+            text: msg,
+            tag: user.institution.tag,
+            color: user.institution.color
+        });
     });
 
     // HQ: Nachricht löschen
@@ -3623,73 +3682,88 @@ io.on('connection', (socket) => {
     // --- BLOG / SYSTEM LOGS SYSTEM ---
 
 // 1. LISTE ANFORDERN (Mit Sicherheits-Filter)
-    socket.on('blog_list_req', () => {
+    socket.on('blog_list_req', async () => {
         const user = users[socket.id];
-        const isAdmin = user && user.isAdmin;
+        try {
+            const allPosts = await db.getBlogPosts();
 
-        // Wir erstellen eine Kopie für den Client
-        const sanitized = blogPosts.map(p => {
-            // Wenn Admin ODER kein Passwort -> Alles senden
-            if (!p.password || isAdmin) {
+            // ZENSUR-LOGIK:
+            const sanitized = allPosts.map(p => {
+                // Wenn ein Passwort existiert UND der User kein Admin ist:
+                // Inhalt löschen und Flag setzen!
+                if (p.password && (!user || !user.isAdmin)) {
+                    return {
+                        ...p,
+                        content: undefined,   // Inhalt weg!
+                        attachment: undefined, // Datei weg!
+                        isProtected: true,    // Signal für Client: "Zeig Passwort-Feld"
+                        password: null        // Passwort-Hash nicht mitsenden!
+                    };
+                }
+                // Sonst alles zeigen
                 return p;
-            }
+            });
 
-            // Wenn Passwort geschützt und KEIN Admin -> Inhalt verstecken
-            return {
-                id: p.id,
-                timestamp: p.timestamp,
-                title: p.title,
-                tags: p.tags,
-                important: p.important,
-                author: p.author,
-                isProtected: true // Signal für Client: "Hier ist ein Schloss davor"
-                // content, attachment und password FEHLEN hier absichtlich!
-            };
-        });
+            socket.emit('blog_list_res', sanitized);
 
-        // Sortieren
-        sanitized.sort((a, b) => b.timestamp - a.timestamp);
-        socket.emit('blog_list_res', sanitized);
+        } catch (e) {
+            console.error("Error fetching blog list:", e);
+            socket.emit('system_message', 'DATABASE ERROR.');
+        }
     });
 
     // 1b. GESCHÜTZTEN INHALT ANFORDERN
-    socket.on('blog_unlock_req', (data) => {
-        const post = blogPosts.find(p => p.id === data.id);
+// 1b. GESCHÜTZTEN INHALT ENTSPERREN
+    socket.on('blog_unlock_req', async (data) => {
+        // data = { id, password }
+        const post = await db.getBlogPostById(data.id);
 
-        if (!post) return socket.emit('system_message', 'ERROR: Data not found.');
+        if (!post) return socket.emit('system_message', 'ERROR: Post not found.');
 
-        // Passwort prüfen
+        // Passwort Vergleich (Hier Klartext, für höhere Sicherheit später Hash nutzen)
         if (post.password === data.password) {
-            // Erfolg: Wir senden den VOLLEN Post an diesen einen User
+            // Erfolg: Sende den VOLLEN Post an diesen User
             socket.emit('blog_unlock_success', post);
         } else {
-            socket.emit('system_message', 'ACCESS DENIED: Invalid Decryption Key.');
+            socket.emit('system_message', 'ACCESS DENIED: Incorrect password.');
         }
     });
 
 // --- BLOG SYSTEM (ADVANCED) ---
 
-    // 1. POST ERSTELLEN (Mit File Upload & Permissions)
+    // 1. POST ERSTELLEN ODER EDITIEREN (Kugelsichere Version)
     socket.on('blog_post_req', async (data) => {
         const user = users[socket.id];
 
-        // --- A) BERECHTIGUNG ---
-        let authorTag = '';
-        let authorName = '';
+        console.log(`[BLOG] Incoming Request from ${user ? user.username : 'Unknown'}`); // DEBUG LOG
+
+        // --- A) IDENTITÄT & RECHTE PRÜFEN ---
+        let authorTag = 'UNKNOWN';
+        let authorName = 'Anonymous';
+        let isEditMode = !!data.id;
 
         if (user && user.isAdmin) {
+            // ADMINS bekommen harte Werte
             authorTag = 'ADMIN';
             authorName = 'SYSTEM ADMINISTRATOR';
-        } else if (user && user.institution) {
+        }
+        else if (user && user.institution) {
+            // INSTITUTIONEN
             authorTag = user.institution.tag;
-            authorName = user.institution.name;
-        } else {
+            // Fallback: Wenn Name fehlt, nimm den Tag
+            authorName = user.institution.name || user.institution.tag || 'Unknown Agency';
+        }
+        else {
+            console.log('[BLOG] Access Denied: No Admin/Institution credentials.');
             return socket.emit('system_message', 'ACCESS DENIED: Insufficient permissions.');
         }
 
-        if (!data.title || !data.content) return;
+        // --- B) VALIDIERUNG ---
+        if (!data.title || !data.content) {
+            socket.emit('system_message', 'ERROR: Title and Content required.');
+            return;
+        }
 
-        // --- B) VALIDIERUNG & SANITIZING ---
         const cleanTitle = escapeHtml(data.title);
         const cleanContent = escapeHtml(data.content);
 
@@ -3698,37 +3772,26 @@ io.on('connection', (socket) => {
             cleanTags = data.tags.map(t => escapeHtml(t));
         }
 
-        // --- C) FILE UPLOAD LOGIC ---
+        // --- C) DATEI VERARBEITUNG (Safe Check) ---
         let attachmentData = null;
 
         if (data.file && data.file.buffer) {
             try {
-                // Name säubern
+                // Check ob UPLOAD_DIR existiert, sonst Fehler vermeiden
+                if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
                 const originalName = data.file.name || 'file';
                 const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-                // Endung prüfen (Security)
-                const ext = path.extname(cleanName).toLowerCase();
-                const forbiddenExts = ['.exe', '.bat', '.sh', '.php', '.js', '.html'];
-                if (forbiddenExts.includes(ext)) {
-                    socket.emit('system_message', 'SECURITY ALERT: File type prohibited.');
-                    return;
-                }
-
-                // Größe prüfen (10MB)
                 const MAX_SIZE = 10 * 1024 * 1024;
-                if (data.file.size > MAX_SIZE || data.file.buffer.length > MAX_SIZE) {
+                if (data.file.size > MAX_SIZE) {
                     socket.emit('system_message', 'ERROR: File too large (Max 10MB).');
                     return;
                 }
 
-                // Speichern
                 const uniquePrefix = Date.now();
                 const safeFilename = `${uniquePrefix}_${cleanName}`;
-                // ACHTUNG: Stelle sicher, dass UPLOAD_DIR oben in server.js definiert ist!
-                // const UPLOAD_DIR = path.join(__dirname, 'public/uploads');
                 const filePath = path.join(UPLOAD_DIR, safeFilename);
-
                 fs.writeFileSync(filePath, data.file.buffer);
 
                 attachmentData = {
@@ -3741,33 +3804,63 @@ io.on('connection', (socket) => {
                 console.error("Upload Error:", err);
                 return socket.emit('system_message', 'ERROR: Upload protocol failed.');
             }
+        } else if (data.existingAttachment) {
+            attachmentData = data.existingAttachment;
         }
 
-        // --- D) DATENBANK SPEICHERN ---
         try {
-            await db.createBlogPost({
-                title: cleanTitle,
-                content: cleanContent,
-                authorTag: authorTag,
-                authorName: authorName,
-                tags: cleanTags,
-                attachment: attachmentData,
-                important: !!data.broadcast
-            });
+            // --- D) DATENBANK OPERATION ---
 
-            socket.emit('blog_action_success', 'Log entry committed to database.');
+            if (isEditMode) {
+                // UPDATE
+                const oldPost = await db.getBlogPostById(data.id);
+                if (!oldPost) return socket.emit('system_message', 'ERROR: Post not found in DB.');
 
-            // Live Update
+                // Rechte Check
+                let allowed = false;
+                if (user.isAdmin) allowed = true;
+                if (user.institution && user.institution.tag === oldPost.author_tag) allowed = true;
+
+                if (!allowed) return socket.emit('system_message', 'ACCESS DENIED: Not your post.');
+
+                await db.updateBlogPost(data.id, {
+                    title: cleanTitle,
+                    content: cleanContent,
+                    tags: cleanTags,
+                    attachment: attachmentData,
+                    important: !!data.broadcast,
+                    password: data.password // <--- HINZUFÜGEN
+                });
+
+                socket.emit('blog_action_success', 'Log entry updated.');
+
+            } else {
+                // CREATE
+                // Hier prüfen wir nochmal, ob alles da ist
+                console.log(`[BLOG] Creating Post: ${cleanTitle} by ${authorName} (${authorTag})`);
+
+                await db.createBlogPost({
+                    title: cleanTitle,
+                    content: cleanContent,
+                    authorTag: authorTag,
+                    authorName: authorName,
+                    tags: cleanTags,
+                    attachment: attachmentData,
+                    important: !!data.broadcast,
+                    password: data.password // <--- HINZUFÜGEN
+                });
+
+                socket.emit('blog_action_success', 'Log entry committed.');
+                if (data.broadcast) io.emit('system_message', `⚠️ NEW SYSTEM LOG: ${cleanTitle}`);
+            }
+
+            // Update an alle
             const logs = await db.getBlogPosts();
             io.emit('update_system_logs', logs);
 
-            if (data.broadcast) {
-                io.emit('system_message', `⚠️ NEW SYSTEM LOG: ${cleanTitle}`);
-            }
-
         } catch (e) {
-            console.error(e);
-            socket.emit('system_message', 'DATABASE ERROR.');
+            console.error("[BLOG] DATABASE ERROR:", e);
+            socket.emit('system_message', 'DATABASE ERROR: Check server logs.');
         }
     });
 
