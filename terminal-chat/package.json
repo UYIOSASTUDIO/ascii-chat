@@ -11,14 +11,18 @@
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "bcrypt": "^6.0.0",
     "dotenv": "^17.2.3",
     "escape-html": "^1.0.3",
     "express": "^5.2.1",
     "express-rate-limit": "^8.2.1",
     "helmet": "^8.1.0",
+    "nodemailer": "^7.0.12",
     "qrcode": "^1.5.4",
     "socket.io": "^4.8.1",
     "speakeasy": "^2.0.0",
+    "sqlite": "^5.1.1",
+    "sqlite3": "^5.1.7",
     "web-push": "^3.6.7"
   }
 }

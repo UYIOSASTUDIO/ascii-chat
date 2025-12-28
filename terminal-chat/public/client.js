@@ -67,6 +67,7 @@ let currentVoiceTarget = null; // Speichert den Key des aktuellen Gesprächspart
 let fileShareWindow = null;
 
 let institutionStyles = {}; // Speichert: { UserKey: { color: '#...', tag: '...' } }
+let requestData = {};
 
 // Hilfsfunktion für den Accept-Button
 window.triggerAccept = (key) => {
@@ -814,6 +815,81 @@ async function handleInput(text) {
         return;
     }
 
+    // --- SETUP WIZARD ---
+    if (appState === 'SETUP_TAG') {
+        if (text.trim()) socket.emit('setup_step_tag', text.trim());
+        return;
+    }
+    if (appState === 'SETUP_PASS') {
+        if (text.trim()) socket.emit('setup_step_pass', text.trim());
+        return; // Verhindert, dass Passwort im Terminal-Verlauf bleibt
+    }
+    if (appState === 'SETUP_2FA_VERIFY') {
+        if (text.trim()) socket.emit('setup_step_2fa_verify', text.trim());
+        return;
+    }
+
+    // --- WIZARD: REQUEST INSTITUTION ---
+    if (appState === 'REQ_NAME') {
+        if (text.trim()) {
+            requestData.name = text.trim();
+            appState = 'REQ_TAG';
+            printLine('2. Enter Official Agency ID (TAG) [e.g. CIA]:', 'system-msg');
+            promptSpan.textContent = 'TAG>';
+        }
+        return;
+    }
+    if (appState === 'REQ_TAG') {
+        if (text.trim()) {
+            requestData.tag = text.trim().toUpperCase();
+            appState = 'REQ_MSG';
+            printLine('3. Enter Application Message (Reason for access):', 'system-msg');
+            promptSpan.textContent = 'MSG>';
+        }
+        return;
+    }
+    if (appState === 'REQ_MSG') {
+        if (text.trim()) {
+            requestData.msg = text.trim();
+            appState = 'REQ_EMAIL';
+            printLine('4. Enter Contact Email (for secure verification):', 'system-msg');
+            promptSpan.textContent = 'EMAIL>';
+        }
+        return;
+    }
+    if (appState === 'REQ_EMAIL') {
+        if (text.trim()) {
+            requestData.email = text.trim();
+            printLine('Submitting application packet...', 'system-msg');
+            // Alles absenden
+            socket.emit('register_request_submit', requestData);
+
+            // Reset
+            appState = 'IDLE';
+            promptSpan.textContent = '>';
+            requestData = {};
+        }
+        return;
+    }
+
+    // --- WIZARD: SETUP (Erweitert) ---
+    if (appState === 'SETUP_CONFIRM') {
+        socket.emit('setup_step_confirm', text.trim());
+        return;
+    }
+    if (appState === 'SETUP_EDIT_NAME') {
+        socket.emit('setup_step_edit_name', text.trim());
+        return;
+    }
+    if (appState === 'SETUP_EDIT_TAG') {
+        socket.emit('setup_step_edit_tag', text.trim());
+        return;
+    }
+    if (appState === 'SETUP_DESC') {
+        socket.emit('setup_step_desc', text.trim());
+        return;
+    }
+
     // --- AUTH FLOW: PASSWORT EINGABE ---
     if (appState === 'AUTH_PASS') {
         if (text === 'cancel') {
@@ -1205,6 +1281,32 @@ async function handleInput(text) {
             }
         }
 
+        // --- ADMIN COMMANDS ---
+        else if (cmd === '/admin') {
+            const sub = args[1];
+
+            if (sub === 'requests') {
+                printLine('Fetching pending applications...', 'system-msg');
+                socket.emit('admin_list_requests');
+            }
+            else if (sub === 'approve') {
+                const id = args[2];
+                if (!id) {
+                    printLine('USAGE: /admin approve [REQUEST_ID]', 'error-msg');
+                    return;
+                }
+                printLine(`Authorizing Request ID [${id}]...`, 'system-msg');
+                socket.emit('admin_approve_request', id);
+            }
+            // Deine alten Befehle (ban, broadcast) kannst du hier lassen...
+            else if (sub === 'broadcast') {
+                socket.emit('admin_broadcast', args.slice(2).join(' '));
+            }
+            else {
+                printLine('ADMIN TOOLS: requests, approve [ID], broadcast [MSG]', 'system-msg');
+            }
+        }
+
      // --- ADMIN BAN HAMMER ---
      else if (cmd === '/ban') {
          const targets = args.slice(1); // Alle IDs nach /ban
@@ -1396,6 +1498,26 @@ async function handleInput(text) {
             window.pendingTip = { target: target.toUpperCase(), msg: msg };
         }
 
+        // --- LIST COMMAND CENTER ---
+        else if (cmd === '/list') {
+            const sub = args[1]; // Das Wort nach /list
+
+            // 1. INSTITUTIONEN
+            if (sub === 'institutions' || sub === 'inst') {
+                printLine('Accessing global secure registry...', 'system-msg');
+                socket.emit('list_institutions_req');
+            }
+
+                // HIER KANNST DU SPÄTER ANDERE LISTEN HINZUFÜGEN:
+                // else if (sub === 'groups') socket.emit('group_list_req');
+            // else if (sub === 'pubs') socket.emit('pub_list_request');
+
+            else {
+                printLine('USAGE: /list institutions', 'error-msg');
+                // printLine('       /list groups', 'error-msg'); // Wenn du das später umziehst
+            }
+        }
+
         // --- HQ LOGIN & DASHBOARD ---
         else if (cmd === '/hq') {
             const sub = args[1];
@@ -1415,7 +1537,60 @@ async function handleInput(text) {
 
                 socket.emit('hq_broadcast_req', msg);
             }
+
+            else if (sub === 'description') {
+                // Check: Sind wir eingeloggt?
+                if (!window.isHqLoggedIn) {
+                    printLine('ACCESS DENIED. Login required.', 'error-msg');
+                    return;
+                }
+
+                // Alles nach "/hq description" ist der Text
+                const desc = args.slice(2).join(' ');
+
+                if (!desc) {
+                    printLine('USAGE: /hq description [TEXT]', 'error-msg');
+                    return;
+                }
+
+                // Senden
+                socket.emit('hq_update_description', desc);
+            }
         }
+
+        else if (cmd === '/setup') {
+            const token = args[1];
+            if (token) {
+                printLine('Initializing Setup Protocol...', 'system-msg');
+                socket.emit('setup_init', token);
+            } else {
+                printLine('USAGE: /setup [TOKEN]', 'error-msg');
+            }
+        }
+
+        else if (cmd === '/request') {
+            if (args[1] === 'institution') {
+                printLine('--- NEW INSTITUTION APPLICATION ---', 'highlight-msg');
+                printLine('1. Enter Official Institution Name:', 'system-msg');
+                appState = 'REQ_NAME';
+                promptSpan.textContent = 'NAME>';
+            } else {
+                printLine('USAGE: /request institution', 'error-msg');
+            }
+        }
+
+        // NEUER BEFEHL: /verify
+        else if (cmd === '/verify') {
+            const email = args[1];
+            const code = args[2];
+            if (email && code) {
+                printLine('Verifying identity...', 'system-msg');
+                socket.emit('register_verify_submit', { email, code });
+            } else {
+                printLine('USAGE: /verify [EMAIL] [CODE]', 'error-msg');
+            }
+        }
+
      else if (cmd === '/help') {
          printLine('COMMANDS: /connect, /group, /pub, /drop, /ping, /nudge, /info, /auth, /ghost, /leave', 'system-msg');
      }
@@ -2870,22 +3045,34 @@ socket.on('voice_terminated', () => {
 // --- HQ EVENTS ---
 
 // 1. Key empfangen (Informant) -> Verschlüsseln & Senden
-// Key empfangen -> Verschlüsseln -> Senden
-socket.on('hq_key_res', async (data) => {
-    // data: { targetId, key }
-    if (window.pendingTip && window.pendingTip.target === data.targetId) {
-        try {
-            const encrypted = await encryptForHq(window.pendingTip.msg, data.key);
+// SERVER LIEFERT DEN KEY -> WIR VERSCHLÜSSELN & SENDEN
+socket.on('hq_key_resp', async (data) => {
+    // data: { targetId: "KGB", publicKey: "-----BEGIN PUBLIC KEY..." }
 
-            socket.emit('hq_send_tip', {
-                targetId: data.targetId,
-                content: encrypted
-            });
+    // Prüfen, ob wir überhaupt einen Tipp senden wollten
+    if (!window.pendingTip || window.pendingTip.target !== data.targetId) {
+        return;
+    }
 
-            window.pendingTip = null;
-        } catch (e) {
-            printLine('ENCRYPTION ERROR.', 'error-msg');
-        }
+    printLine('Uplink secured. Encrypting payload...', 'system-msg');
+
+    try {
+        // 1. Nachricht verschlüsseln (Mit dem Key aus der DB)
+        // Wir nutzen eine Hilfsfunktion (siehe Schritt 2)
+        const encryptedContent = await encryptHqMessage(window.pendingTip.msg, data.publicKey);
+
+        // 2. Den verschlüsselten Brief abschicken
+        socket.emit('hq_send_tip', {
+            targetId: data.targetId,
+            content: encryptedContent
+        });
+
+        // Aufräumen
+        window.pendingTip = null;
+
+    } catch (e) {
+        console.error(e);
+        printLine('ENCRYPTION ERROR: Could not seal message.', 'error-msg');
     }
 });
 
@@ -2929,6 +3116,39 @@ socket.on('auth_failed', (reason) => {
     printLine('Local terminal session has been flagged.', 'system-msg');
 });
 
+// AUTHENTIFIZIERUNGS-SCHRITTE (Antwort vom Server verarbeiten)
+socket.on('auth_step', (data) => {
+    // data sieht so aus: { step: 'PASS', msg: 'UPLINK ESTABLISHED...' }
+
+    // 1. Nachricht anzeigen
+    printLine(data.msg, 'success-msg');
+
+    // 2. Modus umschalten
+    if (data.step === 'PASS') {
+        appState = 'AUTH_PASS';
+
+        // Prompt ändern
+        promptSpan.setAttribute('data-prev-prompt', promptSpan.textContent);
+        promptSpan.textContent = 'PASSWORD>';
+        promptSpan.className = 'prompt-error'; // Rot für "Sicherheitsbereich"
+    }
+    else if (data.step === '2FA') {
+        appState = 'AUTH_2FA';
+        promptSpan.textContent = '2FA-CODE>';
+        promptSpan.className = 'prompt-highlight'; // Gelb/Cyan für Wichtigkeit
+    }
+});
+
+// AUTH FEHLGESCHLAGEN
+socket.on('auth_fail', (msg) => {
+    printLine(msg, 'error-msg');
+
+    // Reset zum Normalzustand
+    appState = 'IDLE';
+    promptSpan.textContent = '>';
+    promptSpan.className = 'prompt-default';
+});
+
 // AUTH SUCCESS (HQ)
 socket.on('hq_login_success', async (data) => {
     // data: { id, username, privateKey, ... }
@@ -2937,6 +3157,11 @@ socket.on('hq_login_success', async (data) => {
 
     window.hqSessionStart = Date.now();
     // ------------------------------------
+
+    // --- WICHTIG: PRIVATE KEY SPEICHERN ---
+    // Den brauchen wir gleich zum Entschlüsseln der Inbox
+    window.hqPrivateKey = data.privateKey;
+    // --------------------------------------
 
     // 1. Private Key speichern (fürs Entschlüsseln)
     try {
@@ -2964,7 +3189,20 @@ socket.on('hq_login_success', async (data) => {
     promptSpan.textContent = `${data.id}/COMMAND>`;
     promptSpan.className = 'prompt-error';
 
-    // 4. Inbox sofort öffnen
+// UI Updates
+    activeChatId = 'HQ_INBOX';
+
+    // Chat Objekt anlegen falls nicht existiert
+    if (!myChats['HQ_INBOX']) {
+        myChats['HQ_INBOX'] = {
+            id: 'HQ_INBOX',
+            name: 'Secure Inbox',
+            type: 'system',
+            history: [],
+            unread: data.inboxCount || 0
+        };
+    }
+
     switchChat('HQ_INBOX');
 });
 
@@ -2991,10 +3229,17 @@ socket.on('hq_inbox_data', async (inbox) => {
     for (const msg of liveMessages) {
         let content = "[DECRYPTING...]";
 
+        // Prüfen ob Key da ist
         if (window.hqPrivateKey) {
             try {
+                // Hier rufen wir die NEUE Funktion auf
                 content = await decryptHqMessage(msg.content, window.hqPrivateKey);
-            } catch(e) { content = "[DECRYPTION FAILED]"; }
+            } catch(e) {
+                console.error(e);
+                content = "[DECRYPTION FAILED]";
+            }
+        } else {
+            content = "[KEY MISSING]";
         }
 
         const senderInfo = `SENDER: ${msg.senderName} [ID: ${msg.senderId}]`;
@@ -3904,19 +4149,41 @@ async function encryptForHq(text, pubKeyPem) {
     return arrayBufferToBase64(buffer);
 }
 
-// Nachricht entschlüsseln (HQ nutzt Private Key)
-async function decryptHqMessage(base64Data, privateKey) {
+// --- RSA ENTSCHLÜSSELUNG (FÜR INBOX) ---
+
+async function decryptHqMessage(base64Cipher, privateKeyPem) {
     try {
-        const buffer = base64ToArrayBuffer(base64Data);
-        const decrypted = await window.crypto.subtle.decrypt(
-            { name: "RSA-OAEP" },
-            privateKey,
-            buffer
+        // 1. PEM in Binary wandeln
+        const binaryDer = _pemToArrayBuffer(privateKeyPem);
+
+        // 2. Private Key importieren
+        const key = await window.crypto.subtle.importKey(
+            "pkcs8", // Wichtig: Private Keys sind meist PKCS8 Format
+            binaryDer,
+            {
+                name: "RSA-OAEP",
+                hash: "SHA-256"
+            },
+            false,
+            ["decrypt"]
         );
-        const dec = new TextDecoder();
-        return dec.decode(decrypted);
+
+        // 3. Ciphertext von Base64 zu Binary
+        const encryptedData = _base64ToArrayBuffer(base64Cipher);
+
+        // 4. Entschlüsseln
+        const decryptedBuffer = await window.crypto.subtle.decrypt(
+            { name: "RSA-OAEP" },
+            key,
+            encryptedData
+        );
+
+        // 5. Zu Text wandeln
+        return new TextDecoder().decode(decryptedBuffer);
+
     } catch (e) {
-        return "[DECRYPTION FAILED]";
+        console.error("Decryption details:", e);
+        throw e; // Fehler weiterwerfen, damit "DECRYPTION FAILED" angezeigt wird
     }
 }
 
@@ -3932,18 +4199,78 @@ async function importRsaPublicKey(pem) {
         ["encrypt"]
     );
 }
-function arrayBufferToBase64(buffer) {
+
+// Neue Hilfsfunktion für Base64 -> ArrayBuffer
+function _base64ToArrayBuffer(base64) {
+    const binaryString = window.atob(base64);
+    const len = binaryString.length;
+    const bytes = new Uint8Array(len);
+    for (let i = 0; i < len; i++) {
+        bytes[i] = binaryString.charCodeAt(i);
+    }
+    return bytes.buffer;
+}
+
+// --- RSA VERSCHLÜSSELUNG FÜR HQ TIPPS ---
+
+async function encryptHqMessage(plainText, publicKeyPem) {
+    // 1. PEM String in ein Format umwandeln, das der Browser versteht (ArrayBuffer)
+    const binaryDer = _pemToArrayBuffer(publicKeyPem);
+
+    // 2. Key importieren (Web Crypto API)
+    const key = await window.crypto.subtle.importKey(
+        "spki",
+        binaryDer,
+        {
+            name: "RSA-OAEP",
+            hash: "SHA-256"
+        },
+        false,
+        ["encrypt"]
+    );
+
+    // 3. Text encodieren
+    const enc = new TextEncoder();
+    const encodedData = enc.encode(plainText);
+
+    // 4. Verschlüsseln
+    const encryptedData = await window.crypto.subtle.encrypt(
+        {
+            name: "RSA-OAEP"
+        },
+        key,
+        encodedData
+    );
+
+    // 5. Als String zurückgeben (Base64), damit wir es per Socket senden können
+    return _arrayBufferToBase64(encryptedData);
+}
+
+// --- HILFSFUNKTIONEN ---
+
+// Aktualisierte Version: Kann PUBLIC und PRIVATE Keys verarbeiten!
+function _pemToArrayBuffer(pem) {
+    // Entfernt Header, Footer und Zeilenumbrüche
+    const b64Lines = pem.replace(/(-----(BEGIN|END) (PUBLIC|PRIVATE) KEY-----|\n|\s)/g, "");
+
+    const str = window.atob(b64Lines);
+    const buf = new ArrayBuffer(str.length);
+    const bufView = new Uint8Array(buf);
+    for (let i = 0, strLen = str.length; i < strLen; i++) {
+        bufView[i] = str.charCodeAt(i);
+    }
+    return buf;
+}
+
+// Wandelt binäre Daten zurück in Base64 String
+function _arrayBufferToBase64(buffer) {
     let binary = '';
     const bytes = new Uint8Array(buffer);
-    for (let i = 0; i < bytes.byteLength; i++) { binary += String.fromCharCode(bytes[i]); }
+    const len = bytes.byteLength;
+    for (let i = 0; i < len; i++) {
+        binary += String.fromCharCode(bytes[i]);
+    }
     return window.btoa(binary);
-}
-function base64ToArrayBuffer(base64) {
-    const binary_string = window.atob(base64);
-    const len = binary_string.length;
-    const bytes = new Uint8Array(len);
-    for (let i = 0; i < len; i++) { bytes[i] = binary_string.charCodeAt(i); }
-    return bytes.buffer;
 }
 
 // --- HQ INBOX UI ---
@@ -4056,6 +4383,52 @@ socket.on('hq_connect_approved', async (data) => {
         targetKey: targetKey,
         publicKey: pubKeyPem
     });
+});
+
+// SETUP UI HANDLER
+socket.on('setup_prompt', (data) => {
+    if (data.error) {
+        printLine(data.msg, 'error-msg');
+        return; // Oder appState resetten, je nach Wunsch
+    }
+
+    printLine(data.msg, 'system-msg');
+
+    if (data.step === 'CONFIRM') {
+        appState = 'SETUP_CONFIRM';
+        promptSpan.textContent = 'CONFIRM>';
+    }
+    else if (data.step === 'EDIT_NAME') {
+        appState = 'SETUP_EDIT_NAME';
+        promptSpan.textContent = 'NEW-NAME>';
+    }
+    // --- DIESER TEIL MUSS VORHANDEN SEIN ---
+    else if (data.step === 'EDIT_TAG') {
+        appState = 'SETUP_EDIT_TAG';
+        promptSpan.textContent = 'NEW-TAG>';
+    }
+    // ---------------------------------------
+    else if (data.step === 'DESC') {
+        appState = 'SETUP_DESC';
+        promptSpan.textContent = 'DESC>';
+    }
+    else if (data.step === 'PASS') {
+        appState = 'SETUP_PASS';
+        promptSpan.textContent = 'PASSWORD>';
+    }
+    else if (data.step === '2FA') {
+        appState = 'SETUP_2FA_VERIFY';
+        promptSpan.textContent = '2FA-CODE>';
+        if (data.secret) printLine('SECRET: ' + data.secret, 'highlight-msg');
+    }
+});
+
+socket.on('setup_complete', (data) => {
+    printLine('SETUP SUCCESSFUL. SYSTEM RESTARTING...', 'success-msg');
+    appState = 'IDLE';
+    promptSpan.textContent = '>';
+    // Optional: Seite neu laden oder User zwingen sich einzuloggen
+    setTimeout(() => window.location.reload(), 2000);
 });
 
 // --- INIT ---

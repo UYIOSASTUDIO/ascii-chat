@@ -12,38 +12,17 @@ const webpush = require('web-push');
 const fs = require('fs'); // <--- WICHTIG für das Speichern der Blog-Posts
 const escapeHtml = require('escape-html');
 const { generateKeyPairSync } = require('crypto');
+const db = require('./database'); // Unser neues Modul
+const mailer = require('./mailer'); // NEU: Unser Mailer Modul
 
 
 const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
 const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
 
+const setupSessions = {}; // Temp-Speicher für Setup-Daten
+
 const activeGroupLinks = {};
 const groups = {};
-
-// --- INSTITUTIONAL ACCESS CONTROL (IAC) ---
-// Hier definierst du die festen Accounts.
-// SECRET muss ein Base32 String sein (für Google Authenticator).
-const INSTITUTIONS = {
-    'MI6': {
-        name: 'Secret Intelligence Service',
-        tag: 'MI6',               // <--- Das Kürzel für die Anzeige
-        color: '#ff9900',         // <--- Matrix-Grün
-        password: process.env.MI6_PASS || '007',
-        secret: 'KVKFKRCPNZQUYMLXOVYDSQKJKZDTSRLD',
-        inboxFile: 'mi6_inbox.json',
-        keys: generateKeys()
-    },
-    'CIA': {
-        name: 'Central Intelligence Agency',
-        tag: 'CIA',
-        color: '#0099ff',         // <--- CIA-Blau
-        password: process.env.CIA_PASS || 'langley',
-        secret: 'IVGVESKTL52WKSKOIVGEYTKMKJTWKZI=',
-        inboxFile: 'cia_inbox.json',
-        keys: generateKeys()
-    }
-    // Du kannst hier weitere hinzufügen...
-};
 
 function generateKeys() {
     const { publicKey, privateKey } = generateKeyPairSync('rsa', {
@@ -431,148 +410,172 @@ io.on('connection', (socket) => {
 
     // --- SECURE AUTHENTICATION FLOW (3-STAGE) ---
 
-    // STUFE 1: ID CHECK (/auth ID)
-    socket.on('auth_init', (institutionId) => {
-        const id = institutionId.toUpperCase();
+    // 1. AUTH START (Fix & Debug Version)
+    socket.on('auth_init', async (tagRaw) => {
+        if (!tagRaw) return;
 
-        if (INSTITUTIONS[id]) {
-            // Session initialisieren
-            authSessions[socket.id] = {
-                step: 1, // Warten auf Passwort
-                targetId: id,
-                attempts: 0
-            };
+        // WICHTIG: .trim() entfernt versehentliche Leerzeichen am Anfang/Ende
+        const tag = tagRaw.trim().toUpperCase();
 
-            // Client auffordern: Passwort eingeben
-            socket.emit('auth_step_pass_req', INSTITUTIONS[id].name);
-        } else {
-            // Fake Delay gegen User-Enumeration (Sicherheit!)
-            setTimeout(() => {
-                socket.emit('system_message', 'ERROR: Institution ID not found in global registry.');
-            }, 1000);
+        console.log(`[AUTH] Login attempt for TAG: '${tag}'`);
+
+        try {
+            const inst = await db.getInstitutionByTag(tag);
+
+            if (inst) {
+                console.log(`[AUTH] Institution found: ${inst.name} (ID: ${inst.id})`);
+
+                authSessions[socket.id] = {
+                    step: 'PASS',
+                    targetId: inst.tag, // Wir nutzen den exakten Tag aus der DB
+                    attempts: 0
+                };
+
+                // Antwort an Client senden
+                socket.emit('auth_step', { step: 'PASS', msg: `UPLINK ESTABLISHED: ${inst.name}` });
+            } else {
+                console.log(`[AUTH] ERROR: Tag '${tag}' not found in database.`);
+                socket.emit('system_message', `ERROR: CONNECTION REFUSED. Gateway [${tag}] not found.`);
+            }
+        } catch (err) {
+            console.error('[AUTH] Critical Database Error:', err);
+            socket.emit('system_message', 'ERROR: Internal Server Fault.');
         }
     });
 
     // STUFE 2: PASSWORT CHECK
-    socket.on('auth_verify_pass', (password) => {
+    socket.on('auth_verify_pass', async (password) => {
         const session = authSessions[socket.id];
+        if (!session || session.step !== 'PASS') return;
 
-        // Sicherheits-Check: Darf der User hier sein?
-        if (!session || session.step !== 1) return;
+        // NEU: Hash Vergleich über DB
+        const inst = await db.getInstitutionByTag(session.targetId);
 
-        const targetInst = INSTITUTIONS[session.targetId];
+        if (!inst) {
+            socket.emit('auth_fail', 'CRITICAL ERROR: Agency target lost.');
+            return;
+        }
 
-        if (password === targetInst.password) {
-            // Passwort Richtig -> Weiter zu 2FA
-            session.step = 2;
-            session.attempts = 0; // Reset für den nächsten Schritt (oder beibehalten, je nach Strenge)
-            socket.emit('auth_step_2fa_req');
+        // bcrypt prüft, ob "007" zum Hash "$2b$..." passt
+        const isValid = await db.verifyPassword(password, inst.password_hash);
+
+        if (isValid) {
+            session.step = '2FA';
+            socket.emit('auth_step', { step: '2FA', msg: 'CREDENTIALS ACCEPTED.' });
         } else {
-            // Passwort Falsch
             session.attempts++;
-            const left = 3 - session.attempts;
-
-            if (left <= 0) {
-                delete authSessions[socket.id]; // Session killen
-                socket.emit('auth_failed', 'MAXIMUM ATTEMPTS EXCEEDED. CONNECTION LOCKED.');
+            if (session.attempts >= 3) {
+                delete authSessions[socket.id];
+                socket.emit('auth_fail', 'SECURITY ALERT: Too many failed attempts.');
+                socket.disconnect();
             } else {
-                socket.emit('system_message', `ACCESS DENIED: Invalid Password. ${left} attempts remaining.`);
+                socket.emit('system_message', `ACCESS DENIED. Invalid credentials. (${session.attempts}/3)`);
             }
         }
     });
 
     // STUFE 3: 2FA CHECK (Google Authenticator)
-    socket.on('auth_verify_2fa', (token) => {
+    socket.on('auth_verify_2fa', async (token) => {
         const session = authSessions[socket.id];
+        if (!session || session.step !== '2FA') return;
 
-        if (!session || session.step !== 2) return;
+        const inst = await db.getInstitutionByTag(session.targetId);
 
-        const targetInst = INSTITUTIONS[session.targetId];
-
-        // Token prüfen (mit speakeasy)
+        // Prüfen mit dem Secret aus der DB
         const verified = speakeasy.totp.verify({
-            secret: targetInst.secret,
+            secret: inst.two_factor_secret, // Snake_case beachten!
             encoding: 'base32',
             token: token,
-            window: 2 // Erlaubt leichte Zeitabweichung
+            window: 1
         });
 
         if (verified) {
-            // --- ERFOLG! LOGIN DURCHFÜHREN ---
+            // LOGIN ERFOLGREICH
             delete authSessions[socket.id];
 
-            // 1. User Objekt aktualisieren
             users[socket.id].institution = {
-                tag: targetInst.tag,
-                color: targetInst.color
+                tag: inst.tag,
+                color: inst.color,
+                // ACHTUNG: Inbox File Name kommt jetzt aus DB
+                inboxFile: inst.inbox_file
             };
 
-            // SICHERHEIT: Original-Namen merken (damit wir nicht [MI6] [MI6] Elias bekommen)
+            // Name Logik (bleibt gleich wie vorher)
             if (!users[socket.id].originalName) {
                 users[socket.id].originalName = users[socket.id].username;
             }
-
-            // NEU: Name ist jetzt [TAG] + Echter Username (z.B. "[MI6] Elias")
-            // Statt targetInst.name ("Secret Intelligence Service") nehmen wir den User-Namen
-            const newName = `[${targetInst.tag}] ${users[socket.id].originalName}`;
-
+            const newName = `[${inst.tag}] ${users[socket.id].originalName}`;
             users[socket.id].username = newName;
 
             // Inbox laden
             let inbox = [];
-            const inboxPath = path.join(DATA_DIR, targetInst.inboxFile);
+            const inboxPath = path.join(DATA_DIR, inst.inbox_file); // inst.inbox_file nutzen!
             if (fs.existsSync(inboxPath)) {
                 try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
             }
 
-            // Client den Erfolg melden (Hier auch newName nutzen!)
+            // Private Key müssen wir noch generieren oder aus DB holen
+            // VORERST: Generieren wir ihn neu oder nutzen den fixen Server-Key
+            // Für den Anfang generieren wir ihn on-the-fly, da wir ihn nicht in der DB speichern wollen (Sicherheit!)
+            // Später können wir ihn verschlüsselt in der DB ablegen.
+            const tempPrivKey = inst.keys ? inst.keys.priv : ""; // Fallback
+
             socket.emit('hq_login_success', {
                 id: session.targetId,
-                username: newName, // <--- Hier senden wir jetzt "[MI6] Elias"
+                username: newName,
                 inboxCount: inbox.length,
-                privateKey: targetInst.keys.priv
+
+                // --- NEU: ECHTER KEY AUS DER DB ---
+                privateKey: inst.private_key
+                // ---------------------------------
             });
 
             socket.join(`HQ_${session.targetId}`);
             serverLog(`[SECURITY] AUTH SUCCESS: ${users[socket.id].originalName} is active as ${session.targetId}.`);
 
-            // Update an alle senden
+            // Broadcast Update
             broadcastInstitutionUpdate(socket.id);
 
         } else {
-            session.attempts++;
-            const left = 3 - session.attempts;
-
-            if (left <= 0) {
-                delete authSessions[socket.id];
-                socket.emit('auth_failed', 'SECURITY VIOLATION: INVALID 2FA TOKEN.');
-            } else {
-                socket.emit('system_message', `ACCESS DENIED: Invalid Token. ${left} attempts remaining.`);
-            }
+            socket.emit('system_message', 'ERROR: Invalid 2FA Code.');
         }
     });
 
-    // INFORMANT: Key anfordern für eine bestimmte Behörde
-    socket.on('hq_get_key_req', (targetId) => {
-        const inst = INSTITUTIONS[targetId.toUpperCase()];
-        if (inst) {
-            socket.emit('hq_key_res', { targetId: targetId.toUpperCase(), key: inst.keys.pub });
+// INFORMANT: Public Key anfordern (für Verschlüsselung)
+    socket.on('hq_get_key_req', async (targetId) => { // async wichtig!
+        const tag = targetId.toUpperCase();
+
+        // NEU: Datenbankabfrage
+        const inst = await db.getInstitutionByTag(tag);
+
+        if (inst && inst.public_key) {
+            socket.emit('hq_key_resp', {
+                targetId: tag,
+                publicKey: inst.public_key // Kommt jetzt aus der DB Spalte
+            });
         } else {
-            socket.emit('system_message', `ERROR: Institution '${targetId}' unknown.`);
+            socket.emit('system_message', `ERROR: Secure uplink to [${tag}] failed. Target offline or unknown.`);
         }
     });
 
     // INFORMANT: Tipp senden
-    socket.on('hq_send_tip', (data) => {
-        const inst = INSTITUTIONS[data.targetId];
-        if (!inst) return;
+    socket.on('hq_send_tip', async (data) => { // async wichtig!
+        // 1. Institution suchen
+        const inst = await db.getInstitutionByTag(data.targetId);
 
-        // User Identität sicher vom Server holen
+        if (!inst) {
+            socket.emit('system_message', 'ERROR: Destination not found. Drop failed.');
+            return;
+        }
+
+        // 2. User Identität sicher holen
         const senderUser = users[socket.id];
         const safeSenderName = senderUser ? senderUser.username : 'Unknown';
 
-        // Speichern
-        const inboxPath = path.join(DATA_DIR, inst.inboxFile);
+        // 3. Speichern (in die JSON Datei der Institution)
+        // Wir nutzen inst.inbox_file aus der Datenbank!
+        const inboxPath = path.join(DATA_DIR, inst.inbox_file);
+
         let inbox = [];
         if (fs.existsSync(inboxPath)) {
             try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
@@ -582,8 +585,7 @@ io.on('connection', (socket) => {
             id: Date.now() + '-' + Math.floor(Math.random()*10000),
             timestamp: Date.now(),
             content: data.content, // Verschlüsselt
-            // SECURITY: Wir speichern die Socket-ID der Session fest ab
-            senderId: socket.id,
+            senderId: socket.id,   // Wichtig für den Handshake-Button
             senderName: safeSenderName
         };
 
@@ -592,8 +594,9 @@ io.on('connection', (socket) => {
 
         socket.emit('system_message', `>>> INTEL DELIVERED TO ${inst.name}.`);
 
-        // Live Update an das eingeloggte HQ
-        io.to(`HQ_${data.targetId}`).emit('hq_inbox_data', inbox);
+        // 4. Live Update an das eingeloggte HQ senden
+        // Wir senden an den Raum "HQ_TAG" (z.B. HQ_KGB)
+        io.to(`HQ_${inst.tag}`).emit('hq_inbox_data', inbox);
     });
 
     // HQ: SICHERER VERBINDUNGSAUFBAU ZUM INFORMANTEN
@@ -625,30 +628,33 @@ io.on('connection', (socket) => {
         socket.emit('hq_connect_approved', { targetId: targetSocketId });
     });
 
-    // HQ: GLOBAL BROADCAST
-    socket.on('hq_broadcast_req', (text) => {
+    // HQ: BROADCAST MESSAGE
+    socket.on('hq_broadcast_req', (msg) => {
         const user = users[socket.id];
 
-        // 1. Sicherheits-Check: Ist der User bei einer Institution eingeloggt?
+        // Sicherheits-Check: Ist der User eingeloggt und gehört zu einer Institution?
         if (!user || !user.institution) {
-            socket.emit('system_message', 'ERROR: ACCESS DENIED. Authorization required.');
+            socket.emit('system_message', 'ACCESS DENIED. Secure uplink required.');
             return;
         }
 
-        // 2. Datenpaket schnüren
+        // --- DER FIX ---
+        // Vorher stand hier: instName: INSTITUTIONS[user.institution.tag].name
+        // Jetzt nehmen wir den Namen direkt aus der Session (da haben wir ihn beim Login gespeichert):
+
         const broadcastData = {
-            text: text,
-            instName: INSTITUTIONS[user.institution.tag].name, // "Secret Intelligence Service"
-            instTag: user.institution.tag,                     // "MI6"
-            instColor: user.institution.color,                 // "#00ff00"
-            senderName: user.originalName,                     // "Elias" (Der echte Name des Agenten)
-            timestamp: Date.now()
+            sender: user.institution.tag,      // z.B. "MI6"
+            instName: user.institution.name,   // z.B. "Secret Intelligence Service" (Hier lag der Fehler!)
+            message: msg,
+            color: user.institution.color || '#fff'
         };
+        // ----------------
 
-        // 3. An ALLE senden
-        io.emit('hq_broadcast_received', broadcastData);
+        // An ALLE senden
+        io.emit('hq_broadcast', broadcastData);
 
-        serverLog(`HQ BROADCAST von ${user.username}: ${text}`);
+        // Bestätigung an den Sender
+        socket.emit('system_message', `>>> BROADCAST SENT TO ALL SECTORS.`);
     });
 
     // HQ: Nachricht löschen
@@ -678,6 +684,294 @@ io.on('connection', (socket) => {
         // Sicherheits-Check: Ist der Socket im HQ Room?
         if (socket.rooms.has('HQ_CHANNEL')) {
             socket.emit('hq_inbox_data', hqInbox);
+        }
+    });
+
+    // --- INSTITUTIONS DIRECTORY ---
+
+    // --- GLOBAL LIST COMMANDS ---
+
+    // LIST INSTITUTIONS
+    socket.on('list_institutions_req', async () => {
+        const list = await db.getPublicInstitutionList();
+
+        if (list.length === 0) {
+            socket.emit('system_message', 'REGISTRY EMPTY: No active agencies found.');
+        } else {
+            socket.emit('system_message', '========================================');
+            socket.emit('system_message', '      GLOBAL AGENCY DIRECTORY');
+            socket.emit('system_message', '========================================');
+
+            list.forEach(inst => {
+                // Header Zeile: [ID] NAME
+                socket.emit('system_message', `[${inst.tag}] ${inst.name}`);
+
+                // Beschreibung (eingerückt)
+                if (inst.description) {
+                    socket.emit('system_message', `      "${inst.description}"`);
+                } else {
+                    socket.emit('system_message', `      (No public profile established)`);
+                }
+
+                // Leerzeile für bessere Lesbarkeit
+                socket.emit('system_message', ' ');
+            });
+
+            socket.emit('system_message', '========================================');
+            socket.emit('system_message', `TOTAL ACTIVE NODES: ${list.length}`);
+        }
+    });
+
+    // 2. BESCHREIBUNG ÄNDERN (Nur für eingeloggte Institutionen)
+    socket.on('hq_update_description', async (desc) => {
+        const user = users[socket.id];
+
+        // CHECK: Ist User eingeloggt als Institution?
+        if (!user || !user.institution) {
+            socket.emit('system_message', 'ACCESS DENIED. Authorized personnel only.');
+            return;
+        }
+
+        // Limitierung der Länge (Spam-Schutz)
+        if (desc.length > 200) {
+            socket.emit('system_message', 'ERROR: Description too long (max 200 chars).');
+            return;
+        }
+
+        // Update in DB
+        const success = await db.updateInstitutionDescription(user.institution.tag, desc);
+
+        if (success) {
+            socket.emit('system_message', 'PROFILE UPDATED: Description saved to public registry.');
+
+            // Optional: User-Objekt im RAM updaten, falls wir es cachen
+            user.institution.description = desc;
+        } else {
+            socket.emit('system_message', 'ERROR: Database write failed.');
+        }
+    });
+
+    // --- SETUP WIZARD (Token einlösen) ---
+
+    // --- 3. SETUP FLOW (Erweitert) ---
+
+    // Start
+    socket.on('setup_init', async (token) => {
+        const tokenData = await db.getInviteToken(token);
+        if (!tokenData) {
+            socket.emit('system_message', 'ERROR: Invalid Token.');
+            return;
+        }
+
+        // Metadaten parsen (Name & Tag aus der Bewerbung)
+        let prefill = { name: 'Unknown', tag: 'TAG' };
+        try { prefill = JSON.parse(tokenData.org_name_suggestion); } catch(e) { prefill.name = tokenData.org_name_suggestion; }
+
+        setupSessions[socket.id] = {
+            token: token,
+            email: tokenData.approved_email,
+            data: prefill, // Speichern wir hier
+            step: 'CONFIRM'
+        };
+
+        socket.emit('setup_prompt', {
+            step: 'CONFIRM',
+            msg: `TOKEN ACCEPTED. \nRegistered Name: ${prefill.name}\nRegistered ID: ${prefill.tag}\n\nType 'yes' to confirm or 'edit' to change details.`
+        });
+    });
+
+    // Bestätigen oder Editieren
+    socket.on('setup_step_confirm', async (input) => {
+        const session = setupSessions[socket.id];
+        if (!session || session.step !== 'CONFIRM') return;
+
+        if (input.toLowerCase() === 'yes') {
+            session.step = 'DESC';
+            socket.emit('setup_prompt', { step: 'DESC', msg: 'Details confirmed. \nEnter a public description for your institution:' });
+        } else if (input.toLowerCase() === 'edit') {
+            session.step = 'EDIT_NAME';
+            socket.emit('setup_prompt', { step: 'EDIT_NAME', msg: 'Enter new Institution Name:' });
+        } else {
+            socket.emit('setup_prompt', { step: 'CONFIRM', msg: "Type 'yes' or 'edit'.", error: true });
+        }
+    });
+
+    // Falls Edit: Name
+    socket.on('setup_step_edit_name', (name) => {
+        const session = setupSessions[socket.id];
+        if (session.step !== 'EDIT_NAME') return;
+        session.data.name = name;
+        session.step = 'EDIT_TAG';
+        socket.emit('setup_prompt', { step: 'EDIT_TAG', msg: 'Enter new Agency ID (TAG):' });
+    });
+
+    // Falls Edit: Tag
+    socket.on('setup_step_edit_tag', (tag) => {
+        const session = setupSessions[socket.id];
+        if (session.step !== 'EDIT_TAG') return;
+        session.data.tag = tag.toUpperCase();
+        session.step = 'DESC';
+        socket.emit('setup_prompt', { step: 'DESC', msg: 'Updated. Enter public description:' });
+    });
+
+    // Beschreibung
+    socket.on('setup_step_desc', (desc) => {
+        const session = setupSessions[socket.id];
+        if (session.step !== 'DESC') return;
+        session.data.desc = desc;
+        session.step = 'PASS';
+        socket.emit('setup_prompt', { step: 'PASS', msg: 'Description saved. Set your Access Password:' });
+    });
+
+    // 2. TAG WAHL
+    socket.on('setup_step_tag', async (tagRaw) => {
+        const session = setupSessions[socket.id];
+        if (!session || session.step !== 'TAG') return;
+
+        const tag = tagRaw.toUpperCase().replace(/[^A-Z0-9]/g, ''); // Nur Buchstaben/Zahlen
+
+        const existing = await db.getInstitutionByTag(tag);
+        if (existing) {
+            socket.emit('setup_prompt', { step: 'TAG', msg: `ERROR: Tag '${tag}' is taken. Choose another:`, error: true });
+            return;
+        }
+
+        session.tag = tag;
+        session.step = 'PASS';
+        socket.emit('setup_prompt', { step: 'PASS', msg: `Identity '${tag}' confirmed. Set your Access Password:` });
+    });
+
+    // 3. PASSWORT -> 2FA
+    socket.on('setup_step_pass', async (pass) => {
+        const session = setupSessions[socket.id];
+        if (session.step !== 'PASS') return;
+
+        session.password = pass;
+        const secret = speakeasy.generateSecret({ length: 20, name: `SecureChat (${session.data.tag})` });
+        session.tempSecret = secret.base32;
+        session.step = '2FA';
+
+        socket.emit('setup_prompt', { step: '2FA', msg: 'Scan QR / Enter Code:', secret: secret.base32 });
+    });
+
+    // 4. VERIFY & CREATE
+    socket.on('setup_step_2fa_verify', async (token) => {
+        const session = setupSessions[socket.id];
+        if (!session || session.step !== '2FA') return;
+
+        const verified = speakeasy.totp.verify({ secret: session.tempSecret, encoding: 'base32', token: token, window: 1 });
+
+        if (verified) {
+            const success = await db.createInstitution(
+                session.data.tag,
+                session.data.name,
+                session.password,
+                session.tempSecret,
+                '#00ff00'
+            );
+            if (success) {
+                // Beschreibung auch noch speichern!
+                await db.updateInstitutionDescription(session.data.tag, session.data.desc);
+                await db.markTokenUsed(session.token);
+                socket.emit('setup_complete', { tag: session.data.tag });
+                delete setupSessions[socket.id];
+            }
+        } else {
+            socket.emit('setup_prompt', { step: '2FA', msg: 'Invalid Code.', error: true });
+        }
+    });
+
+// --- REGISTRATION FLOW ---
+
+    // --- 1. NEUER REGISTRIERUNGS-FLOW ---
+
+    // Antrag empfangen (Jetzt mit allen Daten)
+    socket.on('register_request_submit', async (data) => {
+        // data = { name, tag, msg, email }
+        if (!data.email || !data.name) return;
+
+        const code = crypto.randomBytes(3).toString('hex').toUpperCase(); // 6 Zeichen Hex
+
+        console.log(`[REGISTER] New Request: ${data.tag} (${data.email})`);
+
+        const success = await db.createRequest(data.name, data.tag, data.msg, data.email, code);
+
+        if (success) {
+            socket.emit('system_message', 'Encrypting payload...');
+            const mailSent = await mailer.sendVerificationEmail(data.email, code);
+
+            if (mailSent) {
+                socket.emit('system_message', `Verification code dispatched to [${data.email}].`);
+                socket.emit('system_message', `Execute: /verify ${data.email} [CODE]`);
+            } else {
+                socket.emit('system_message', 'ERROR: Mail relay failed.');
+            }
+        }
+    });
+
+    // Verifizierung (Bleibt fast gleich, nur neuer Befehl)
+    socket.on('register_verify_submit', async (data) => {
+        const result = await db.verifyRequestEmail(data.email, data.code);
+        if (result.success) {
+            socket.emit('system_message', 'IDENTITY VERIFIED. Application forwarded to Administrator.');
+        } else {
+            socket.emit('system_message', `VERIFICATION FAILED: ${result.msg}`);
+        }
+    });
+
+    // --- ADMIN TOOLS ---
+
+    // --- 2. ADMIN FLOW (Automatische Mail) ---
+
+    // Liste anzeigen (Mit neuem Layout)
+    socket.on('admin_list_requests', async () => {
+        if (!users[socket.id] || !users[socket.id].isAdmin) return;
+
+        const list = await db.getPendingRequests();
+        if (list.length === 0) {
+            socket.emit('system_message', 'No pending applications.');
+        } else {
+            socket.emit('system_message', '--- PENDING REQUESTS ---');
+            list.forEach(req => {
+                socket.emit('system_message', `ID: [${req.id}]`);
+                socket.emit('system_message', `ORG: ${req.org_name} [${req.org_tag}]`);
+                socket.emit('system_message', `MSG: "${req.message}"`);
+                socket.emit('system_message', `CONTACT: ${req.email}`);
+                socket.emit('system_message', `TIME: ${req.request_date}`);
+                socket.emit('system_message', '------------------------');
+            });
+        }
+    });
+
+    // Genehmigen & Mail senden
+    socket.on('admin_approve_request', async (requestId) => {
+        if (!users[socket.id] || !users[socket.id].isAdmin) return;
+
+        const req = await db.getRequestById(requestId);
+        if (!req || req.status !== 'PENDING') {
+            socket.emit('system_message', 'ERROR: Invalid Request ID.');
+            return;
+        }
+
+        const token = 'INVITE-' + crypto.randomBytes(4).toString('hex').toUpperCase();
+
+        // Token speichern (Wir nutzen das suggestion Feld für TAG und NAME getrennt durch | oder JSON)
+        // Einfacher: Wir speichern den TAG als suggestion. Der Name ist in der Request ja auch da.
+        // Wir speichern hier einfach JSON in das Feld 'org_name_suggestion' damit wir beides haben.
+        const metaData = JSON.stringify({ name: req.org_name, tag: req.org_tag });
+
+        await db.createInviteToken(token, req.email, metaData);
+        await db.updateRequestStatus(requestId, 'APPROVED');
+
+        socket.emit('system_message', `APPROVED. Generating Invite Token...`);
+
+        // AUTOMATISCHE EMAIL SENDEN
+        const sent = await mailer.sendInviteTokenEmail(req.email, token, req.org_name);
+
+        if (sent) {
+            socket.emit('system_message', `SUCCESS: Token ${token} sent to ${req.email}.`);
+        } else {
+            socket.emit('system_message', `WARNING: Email failed. Manual send required: ${token}`);
         }
     });
 
@@ -3373,59 +3667,72 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 2. EINTRAG ERSTELLEN / EDITIEREN (Mit File Support)
-    socket.on('blog_post_req', (data) => {
+// --- BLOG SYSTEM (ADVANCED) ---
+
+    // 1. POST ERSTELLEN (Mit File Upload & Permissions)
+    socket.on('blog_post_req', async (data) => {
         const user = users[socket.id];
-        if (!user || !user.isAdmin) {
-            return socket.emit('system_message', 'ACCESS DENIED: Insufficient write permissions.');
+
+        // --- A) BERECHTIGUNG ---
+        let authorTag = '';
+        let authorName = '';
+
+        if (user && user.isAdmin) {
+            authorTag = 'ADMIN';
+            authorName = 'SYSTEM ADMINISTRATOR';
+        } else if (user && user.institution) {
+            authorTag = user.institution.tag;
+            authorName = user.institution.name;
+        } else {
+            return socket.emit('system_message', 'ACCESS DENIED: Insufficient permissions.');
         }
 
         if (!data.title || !data.content) return;
 
-        // --- SECURITY: ANTI-XSS ---
-        // Markdown bleibt erhalten, aber <script> Tags werden zu &lt;script&gt;
+        // --- B) VALIDIERUNG & SANITIZING ---
         const cleanTitle = escapeHtml(data.title);
         const cleanContent = escapeHtml(data.content);
 
-        // Auch Tags müssen sicher sein (falls Array existiert)
         let cleanTags = [];
         if (Array.isArray(data.tags)) {
             cleanTags = data.tags.map(t => escapeHtml(t));
         }
 
+        // --- C) FILE UPLOAD LOGIC ---
         let attachmentData = null;
 
         if (data.file && data.file.buffer) {
             try {
-                // 1. DATEINAMEN SÄUBERN (Nur Buchstaben, Zahlen, Punkt, Strich)
-                // Verhindert "Path Traversal" (../../hack.txt)
-                const originalName = data.file.name || 'unknown_file';
+                // Name säubern
+                const originalName = data.file.name || 'file';
                 const cleanName = originalName.replace(/[^a-zA-Z0-9._-]/g, '_');
 
-                // 2. ENDUNG PRÜFEN (Blacklist)
+                // Endung prüfen (Security)
                 const ext = path.extname(cleanName).toLowerCase();
-                const forbiddenExts = ['.exe', '.bat', '.cmd', '.sh', '.php', '.pl', '.cgi', '.jar', '.js', '.html', '.htm', '.css', '.svg', '.xml'];
+                const forbiddenExts = ['.exe', '.bat', '.sh', '.php', '.js', '.html'];
                 if (forbiddenExts.includes(ext)) {
-                    socket.emit('system_message', 'SECURITY ALERT: File type strictly prohibited.');
-                    return; // Abbruch!
-                }
-
-                // 3. GRÖSSEN-CHECK (Server Authority) - Max 10 MB
-                const MAX_SIZE = 10 * 1024 * 1024;
-                if (data.file.size > MAX_SIZE || data.file.buffer.length > MAX_SIZE) {
-                    socket.emit('system_message', 'ERROR: File exceeds maximum size limit (10MB).');
+                    socket.emit('system_message', 'SECURITY ALERT: File type prohibited.');
                     return;
                 }
 
-                // 4. SPEICHERN
+                // Größe prüfen (10MB)
+                const MAX_SIZE = 10 * 1024 * 1024;
+                if (data.file.size > MAX_SIZE || data.file.buffer.length > MAX_SIZE) {
+                    socket.emit('system_message', 'ERROR: File too large (Max 10MB).');
+                    return;
+                }
+
+                // Speichern
                 const uniquePrefix = Date.now();
                 const safeFilename = `${uniquePrefix}_${cleanName}`;
+                // ACHTUNG: Stelle sicher, dass UPLOAD_DIR oben in server.js definiert ist!
+                // const UPLOAD_DIR = path.join(__dirname, 'public/uploads');
                 const filePath = path.join(UPLOAD_DIR, safeFilename);
 
                 fs.writeFileSync(filePath, data.file.buffer);
 
                 attachmentData = {
-                    originalName: cleanName, // Wir zeigen den gesäuberten Namen
+                    originalName: cleanName,
                     filename: safeFilename,
                     path: '/uploads/' + safeFilename,
                     size: data.file.size
@@ -3434,64 +3741,120 @@ io.on('connection', (socket) => {
                 console.error("Upload Error:", err);
                 return socket.emit('system_message', 'ERROR: Upload protocol failed.');
             }
-        } else if (data.existingAttachment) {
-            attachmentData = data.existingAttachment;
         }
-        // ------------------------------------------------
 
-        const newPost = {
-            id: data.id || crypto.randomUUID(),
-            timestamp: data.timestamp || Date.now(),
-            title: cleanTitle,     // <--- Benutzen
-            content: cleanContent, // <--- Benutzen
-            author: user.username, // Der ist schon safe (siehe Register)
-            tags: cleanTags,       // <--- Benutzen
-            important: !!data.broadcast,
-            attachment: attachmentData,
-            password: data.password || null
-        };
+        // --- D) DATENBANK SPEICHERN ---
+        try {
+            await db.createBlogPost({
+                title: cleanTitle,
+                content: cleanContent,
+                authorTag: authorTag,
+                authorName: authorName,
+                tags: cleanTags,
+                attachment: attachmentData,
+                important: !!data.broadcast
+            });
 
-        const existingIndex = blogPosts.findIndex(p => p.id === newPost.id);
-        if (existingIndex >= 0) {
-            // Falls beim Editieren kein neues File kam, aber ein altes da war -> behalten
-            if (!newPost.attachment && blogPosts[existingIndex].attachment) {
-                // Logik oben (data.existingAttachment) regelt das eigentlich,
-                // aber sicherheitshalber überschreiben wir es nicht mit null, falls gewollt.
+            socket.emit('blog_action_success', 'Log entry committed to database.');
+
+            // Live Update
+            const logs = await db.getBlogPosts();
+            io.emit('update_system_logs', logs);
+
+            if (data.broadcast) {
+                io.emit('system_message', `⚠️ NEW SYSTEM LOG: ${cleanTitle}`);
             }
-            blogPosts[existingIndex] = newPost;
-        } else {
-            blogPosts.push(newPost);
-        }
 
-        saveBlog();
-
-        socket.emit('blog_action_success', 'Log entry committed to database.');
-        io.emit('blog_update_signal');
-
-        if (data.broadcast) {
-            io.emit('system_message', `⚠️ NEW SYSTEM LOG: ${data.title}`);
+        } catch (e) {
+            console.error(e);
+            socket.emit('system_message', 'DATABASE ERROR.');
         }
     });
 
-    // 3. EINTRAG LÖSCHEN (Nur Admin)
-    socket.on('blog_delete_req', (id) => {
+
+    // 2. POST LÖSCHEN (Mit File Cleanup & Permission Check)
+    socket.on('blog_delete_req', async (id) => {
         const user = users[socket.id];
-        if (!user || !user.isAdmin) return socket.emit('system_message', 'ACCESS DENIED.');
+        const post = await db.getBlogPostById(id);
 
-        blogPosts = blogPosts.filter(p => p.id !== id);
-        saveBlog();
+        if (!post) {
+            return socket.emit('system_message', 'ERROR: Entry not found.');
+        }
 
-        socket.emit('blog_action_success', 'Entry purged from archives.');
-        io.emit('blog_update_signal');
+        // --- RECHTE CHECK ---
+        let allowed = false;
+        // Admin darf alles
+        if (user && user.isAdmin) allowed = true;
+        // Institution darf nur eigene
+        if (user && user.institution && user.institution.tag === post.author_tag) allowed = true;
+
+        if (!allowed) {
+            return socket.emit('system_message', 'ACCESS DENIED: You can only delete your own logs.');
+        }
+
+        // --- DATEI LÖSCHEN (Clean up) ---
+        if (post.attachment && post.attachment.filename) {
+            try {
+                const filePath = path.join(UPLOAD_DIR, post.attachment.filename);
+                if (fs.existsSync(filePath)) {
+                    fs.unlinkSync(filePath); // Löscht Datei von der Festplatte
+                }
+            } catch (e) {
+                console.error("File deletion error:", e);
+            }
+        }
+
+        // --- DB LÖSCHEN ---
+        await db.deleteBlogPost(id);
+
+        socket.emit('blog_action_success', 'Entry purged.');
+        const logs = await db.getBlogPosts();
+        io.emit('update_system_logs', logs);
     });
 
 
 });
 
 const PORT = process.env.PORT || 3000;
-server.listen(PORT, () => {
-    console.log(`🚀 SYSTEM ONLINE: Server running on port ${PORT}`);
-});
+// --- SERVER START & DB INIT ---
+(async () => {
+    // 1. Datenbank starten
+    await db.initDB();
+
+    // 2. Standard-Accounts erstellen (nur wenn sie fehlen)
+    // MI6
+    const mi6 = await db.getInstitutionByTag('MI6');
+    if (!mi6) {
+        console.log('[SETUP] Generating default MI6 access...');
+        // Tag, Name, Passwort, 2FA-Secret, Farbe
+        await db.createInstitution('MI6', 'Secret Intelligence Service', '007', 'KVUGK3LSMFZEQUDL', '#00ff00');
+    }
+
+    // CIA
+    const cia = await db.getInstitutionByTag('CIA');
+    if (!cia) {
+        console.log('[SETUP] Generating default CIA access...');
+        await db.createInstitution('CIA', 'Central Intelligence Agency', 'langley', 'KRUW4ZLOMVZUKZLJMVZUKZLJ', '#0088ff');
+    }
+
+    // 3. Server lauschen lassen
+    server.listen(PORT, '0.0.0.0', () => {
+        console.log(`\n----------------------------------------`);
+        console.log(`SECURE SERVER ONLINE ON PORT ${PORT}`);
+        console.log(`DATABASE SYSTEM: ONLINE (SQLite)`);
+
+        // IP Anzeige (Dein bestehender Code hier...)
+        const net = require('os').networkInterfaces();
+        for (const iface of Object.values(net)) {
+            for (const alias of iface) {
+                if (alias.family === 'IPv4' && !alias.internal) {
+                    console.log(`LOCAL ACCESS: http://${alias.address}:${PORT}`);
+                }
+            }
+        }
+        console.log(`----------------------------------------\n`);
+    });
+})();
 
 // --- HELPER: PUBLIC ROOMS NEU ORGANISIEREN ---
 function reorganizePublicRooms() {
