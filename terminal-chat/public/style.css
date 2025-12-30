@@ -75,9 +75,10 @@ html, body {
 
     display: flex;
     flex-direction: column;
-    border-right: var(--border-thick);
+    border-right: var(--border-thick) !important;
     background-color: var(--panel-bg);
     overflow: hidden;
+    z-index: 10;
 }
 
 /* --- MITTLERE SPALTE (TERMINAL) --- */
@@ -88,11 +89,11 @@ html, body {
 
     display: flex;
     flex-direction: column;
-    border-right: var(--border-thick); /* Trennlinie rechts */
     height: 100%;
     position: relative;
     overflow: hidden;
     background-color: var(--bg-color);
+    z-index: 1;
 }
 
 /* --- RECHTE SPALTE (PANELS) --- */
@@ -102,44 +103,62 @@ html, body {
     min-width: 200px;
     max-width: 600px;
     flex-shrink: 0;
+    border-left: var(--border-thick);
 
     display: flex;          /* Flexbox für vertikale Aufteilung (Promo / Voice) */
     flex-direction: column;
     height: 100%;
-    oborder-right: var(--border-thick);
+    border-right: var(--border-thick);
     position: relative;
-    z-index: 5; /* Liegt jetzt unter dem Resizer (z-index 100), aber Border ist im Box-Model */
+    z-index: 10; /* Liegt jetzt unter dem Resizer (z-index 100), aber Border ist im Box-Model */
     background-color: var(--panel-bg);
     overflow: hidden;
 }
 
-/* --- DIE "GRIFFE" (RESIZER) --- */
-/* Vertikaler Resizer (Links & Rechts vom Chat) */
+/* --- RESIZER (GRIFFE) FIXED --- */
+
 .resizer {
-    width: 4px;             /* Breite des Griffs */
-    cursor: col-resize;     /* Mauszeiger wird zum Pfeil <-> */
-    background-color: transparent; /* Unsichtbar im Normalzustand */
-    transition: background-color 0.2s;
-    z-index: 100;
-    margin-left: -2px;      /* Zentriert über dem Border */
-    margin-right: -2px;
+    /* GRÖSSE & POSITION */
+    width: 6px;              /* Etwas breiter, damit man ihn leichter trifft */
+    flex-shrink: 0;          /* WICHTIG: Verhindert, dass Flexbox ihn auf 0px quetscht */
+
+    /* LAYERING - DAS IST DER FIX */
+    position: relative;
+    z-index: 2147483647 !important; /* Maximal möglicher Z-Index Wert im Browser */
+
+    /* ZENTRIERUNG ÜBER DER LINIE */
+    margin-left: -3px;       /* Die Hälfte der Breite negativ, um genau auf der Kante zu sitzen */
+    margin-right: -3px;
+
+    /* OPTIK & CURSOR */
+    cursor: col-resize;
+    background-color: transparent;
+    transition: background-color 0.1s;
 }
 
-/* Wenn man drüber fährt oder zieht: Leuchtet grün */
+/* Hover-Status (Grün) */
 .resizer:hover, .resizer.resizing {
     background-color: var(--accent-color);
 }
 
-/* Horizontaler Resizer (In der rechten Spalte) */
+/* Horizontaler Resizer (Rechte Spalte) */
 .resizer-horizontal {
-    height: 4px;
-    cursor: row-resize;     /* Mauszeiger oben/unten */
-    background-color: transparent;
-    width: 100%;
-    border-top: 1px solid rgba(255,255,255,0.05); /* Dezente Linie */
-    border-bottom: 1px solid rgba(255,255,255,0.05);
+    height: 6px;             /* Auch hier etwas dicker */
     flex-shrink: 0;
+
+    position: relative;
+    z-index: 2147483647 !important; /* Auch hier nach ganz vorne */
+
+    margin-top: -3px;        /* Zentrieren */
+    margin-bottom: -3px;
+
+    cursor: row-resize;
+    background-color: transparent;
+
+    /* Die feine Linie im Hintergrund (optional, hilft bei Orientierung) */
+    border-top: 1px solid rgba(255,255,255,0.05);
 }
+
 .resizer-horizontal:hover {
     background-color: var(--accent-color);
 }
@@ -569,3 +588,629 @@ html, body {
 }
 .cmd-desc { color: #666; font-style: italic; font-size: 0.85em; }
 .autocomplete-active .cmd-desc { color: #999; }
+
+/* --- USER PROFILE BAR (Sidebar Footer) --- */
+.user-panel {
+    background-color: #111; /* Noch dunkler als Sidebar */
+    padding: 5px 15px;
+    display: flex;
+    align-items: center;
+    border-top: var(--border-thick);
+    flex-shrink: 0; /* Darf nicht schrumpfen */
+    min-height: 60px;
+}
+
+.user-avatar {
+    width: 35px;
+    height: 35px;
+    background: var(--accent-color);
+    color: #000;
+    border-radius: 50%; /* Kreis */
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    font-weight: bold;
+    font-size: 1.2em;
+    margin-right: 10px;
+}
+
+.user-info {
+    flex-grow: 1;
+    display: flex;
+    flex-direction: column;
+    justify-content: center; /* WICHTIG: Vertikal zentrieren */
+    gap: 2px; /* Kleiner Abstand zwischen Name und ID */
+    overflow: hidden; /* Wichtig, falls der Name sehr lang ist */
+    margin-right: 10px; /* Kleiner Abstand zum Zahnrad */
+}
+
+.user-name {
+    font-weight: bold;
+    color: var(--text-main);
+    font-size: 1em;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    line-height: 1.1;
+}
+
+.user-id {
+    font-size: 0.75em;
+    color: var(--text-muted);
+}
+
+.session-timer {
+    font-size: 0.65em;
+    color: var(--accent-color);
+    margin-top: 2px;
+}
+
+.user-settings-btn {
+    cursor: pointer;
+    font-size: 1.2em;
+    opacity: 0.7;
+    transition: opacity 0.2s;
+    padding: 5px;
+}
+.user-settings-btn:hover { opacity: 1; transform: rotate(90deg); transition: 0.5s; }
+
+
+/* --- SETTINGS MODAL --- */
+.modal-overlay {
+    position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+    background: rgba(0, 0, 0, 0.8);
+    backdrop-filter: blur(3px);
+    z-index: 10000;
+    display: none; /* Standardmäßig versteckt */
+    justify-content: center;
+    align-items: center;
+}
+.modal-overlay.open { display: flex; animation: fadeIn 0.2s; }
+
+.modal-window {
+    background: var(--panel-bg);
+    border: 1px solid var(--accent-color);
+    width: 450px;
+    max-width: 90%;
+    box-shadow: 0 0 20px rgba(0,0,0,0.8);
+    display: flex;
+    flex-direction: column;
+}
+
+.modal-header {
+    background: var(--bg-color);
+    padding: 15px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    border-bottom: 1px solid #333;
+}
+.modal-header h2 { font-size: 1.1em; color: var(--accent-color); margin: 0; }
+.close-modal { background: none; border: none; color: #fff; font-size: 1.5em; cursor: pointer; }
+
+.modal-content { padding: 20px; }
+
+.setting-group { margin-bottom: 20px; }
+.setting-group label { display: block; color: var(--text-muted); font-size: 0.8em; margin-bottom: 5px; letter-spacing: 1px;}
+
+.readonly-field {
+    background: #111; padding: 10px; color: #666; font-family: monospace; border: 1px solid #333;
+    user-select: all;
+}
+
+.modal-input {
+    width: 100%; background: #000; border: 1px solid #444; color: #fff; padding: 8px;
+    font-family: inherit; font-size: 1em;
+}
+.modal-input:focus { border-color: var(--accent-color); outline: none; }
+
+.sub-text { font-size: 0.7em; color: #555; margin-top: 3px; }
+
+.role-badge {
+    display: inline-block; padding: 5px 10px; background: #333; color: #fff; font-weight: bold; border-radius: 4px; font-size: 0.9em;
+}
+
+.modal-footer {
+    display: flex; justify-content: space-between; align-items: center;
+    margin-top: 10px; border-top: 1px solid #333; padding-top: 15px;
+}
+#login-time-display { font-size: 0.8em; color: #666; }
+
+/* --- TOGGLE SWITCH (für Ghost Mode) --- */
+.switch { position: relative; display: inline-block; width: 40px; height: 20px; vertical-align: middle; margin-left: 10px; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.slider { position: absolute; cursor: pointer; top: 0; left: 0; right: 0; bottom: 0; background-color: #333; transition: .4s; }
+.slider:before { position: absolute; content: ""; height: 14px; width: 14px; left: 3px; bottom: 3px; background-color: white; transition: .4s; }
+input:checked + .slider { background-color: var(--accent-color); }
+input:checked + .slider:before { transform: translateX(20px); background-color: #000; }
+.slider.round { border-radius: 20px; }
+.slider.round:before { border-radius: 50%; }
+
+.row-group { display: flex; justify-content: space-between; align-items: flex-end; }
+.toggle-wrapper { display: flex; align-items: center; }
+
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+
+.system-uptime {
+    font-family: 'Courier New', monospace;
+    font-size: 0.9em;
+    color: var(--accent-color); /* Grün */
+    letter-spacing: 1px;
+    font-weight: bold;
+    text-shadow: 0 0 5px rgba(74, 246, 38, 0.3);
+
+    /* Damit man es beim Fenster-Ziehen nicht aus Versehen markiert */
+    user-select: none;
+    -webkit-app-region: no-drag;
+}
+
+/* Update für Mobile: Timer ausblenden wenn Platz eng wird */
+@media (max-width: 700px) {
+    .system-uptime { display: none; }
+}
+
+/* --- USER CONTEXT POPUP --- */
+.user-popup {
+    position: absolute;
+    z-index: 9999;
+    width: 280px;
+    background-color: #181818;
+    border: 1px solid var(--border-color);
+    box-shadow: 0 5px 15px rgba(0,0,0,0.5);
+    border-radius: 6px;
+    overflow: hidden;
+    animation: fadeIn 0.1s ease-out;
+}
+
+.popup-header {
+    background-color: var(--panel-bg);
+    padding: 15px;
+    display: flex;
+    align-items: center;
+    border-bottom: 1px solid #333;
+}
+
+.popup-avatar {
+    width: 40px; height: 40px;
+    background: var(--accent-color);
+    color: #000;
+    border-radius: 50%;
+    display: flex; justify-content: center; align-items: center;
+    font-weight: bold; font-size: 1.2em;
+    margin-right: 12px;
+}
+
+.popup-title {
+    flex-grow: 1;
+    overflow: hidden;
+}
+
+.popup-name {
+    font-weight: bold;
+    color: #fff;
+    font-size: 1.1em;
+    margin-bottom: 2px;
+}
+
+.popup-id-row {
+    display: flex;
+    align-items: center;
+    font-size: 0.8em;
+    color: var(--text-muted);
+}
+
+.copy-icon {
+    cursor: pointer;
+    margin-left: 8px;
+    transition: transform 0.2s;
+}
+.copy-icon:hover { color: #fff; transform: scale(1.2); }
+
+.popup-body { padding: 15px; }
+
+.popup-section { margin-bottom: 10px; }
+.popup-section label {
+    display: block; font-size: 0.7em; color: #666;
+    text-transform: uppercase; margin-bottom: 4px; letter-spacing: 1px;
+}
+
+.popup-text {
+    color: #ddd; font-size: 0.9em; word-wrap: break-word; line-height: 1.4;
+}
+
+/* --- THE WIRE (FEED) --- */
+.wire-feed-container {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+    padding-bottom: 80px;
+    display: flex;
+    flex-direction: column;
+    gap: 15px;
+}
+
+.wire-card {
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid #333;
+    padding: 15px;
+    border-radius: 4px;
+    display: flex;
+    flex-direction: column;
+    position: relative;
+}
+
+#wire-view {
+    width: 100%;
+    height: 100%;
+    border: none; /* Kein eigener Rahmen, da die Spalten die Rahmen geben */
+    background-color: var(--bg-color);
+}
+
+/* 1. HEADER (Name | ID | Time) */
+.wire-header {
+    display: flex;
+    align-items: baseline;
+    gap: 10px;
+    margin-bottom: 6px;
+    font-size: 0.9em;
+}
+.wire-name { font-weight: bold; color: #fff; }
+.wire-id { color: #666; }
+.wire-id.offline { color: #ff3333; } /* Disconnected Style */
+.wire-time { color: #555; font-size: 0.8em; margin-left: auto; }
+
+/* 2. TAGS */
+.wire-tags {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
+    margin-bottom: 8px;
+    max-height: 1.5em; /* Nur eine Zeile */
+    overflow: hidden;
+}
+.wire-tag {
+    color: var(--accent-color);
+    font-size: 0.85em;
+    font-weight: bold;
+}
+
+/* CONTENT BODY */
+.wire-body {
+    color: #ccc;
+    font-size: 1em;
+
+    /* WICHTIG: 3 Zeilen Berechnung */
+    line-height: 1.5em;       /* Eine Zeile ist 1.5em hoch */
+    max-height: 4.5em;        /* 3 Zeilen * 1.5em = 4.5em. Alles danach wird abgeschnitten */
+
+    /* Clamp Logic */
+    display: -webkit-box;
+    -webkit-line-clamp: 3;    /* Zeige exakt 3 Zeilen */
+    -webkit-box-orient: vertical;
+    overflow: hidden;
+    text-overflow: ellipsis;
+
+    /* ABSTÄNDE KORRIGIEREN */
+    margin-bottom: 8px;       /* Kleinerer Abstand nach unten */
+    padding: 0 !important;    /* Kein Innenabstand */
+    text-indent: 0 !important;/* Keine Einrückung */
+
+    /* Erhält Umbrüche, aber entfernt Code-Einrückungen durch HTML-Fix (siehe unten) */
+    white-space: pre-wrap;
+    word-wrap: break-word;
+
+    border-left: 2px solid transparent;
+    transition: border-color 0.2s, max-height 0.3s ease;
+    cursor: default;
+}
+
+/* Wenn ausgeklappt: Limit aufheben */
+.wire-body.expanded, .wire-body.fully-visible {
+    display: block !important;
+    -webkit-line-clamp: unset !important;
+    overflow: visible !important;
+    max-height: none !important;
+}
+
+/* Button Styling (näher dran) */
+.wire-show-more {
+    color: var(--accent-color);
+    font-size: 0.85em;
+    cursor: pointer;
+    margin-top: -4px;  /* Zieht den Button etwas höher zum Text */
+    margin-bottom: 10px;
+    display: none;
+}
+.wire-show-more:hover { text-decoration: underline; }
+
+/* 4. FOOTER (Icons) */
+.wire-footer {
+    display: flex;
+    align-items: center;
+    gap: 25px;
+    border-top: 1px solid rgba(255,255,255,0.1);
+    padding-top: 10px;
+    color: #888;
+    font-size: 0.9em;
+}
+
+.wire-action {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    cursor: pointer;
+    transition: color 0.2s;
+}
+.wire-action:hover { color: #fff; }
+.wire-action.fueled { color: #ffcc00; }
+
+/* --- COMMENTS OVERLAY (Der "Thread" View) --- */
+#wire-comments-view {
+    display: none;
+    flex-direction: column;
+    flex: 1;
+    background: var(--bg-color);
+}
+.comments-header {
+    padding: 15px;
+    border-bottom: 1px solid #333;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    background: var(--panel-bg);
+}
+.comments-list {
+    flex: 1;
+    overflow-y: auto;
+    padding: 20px;
+}
+.comment-item {
+    border-bottom: 1px solid #333;
+    padding: 10px 0;
+    margin-bottom: 10px;
+}
+.comment-meta { font-size: 0.8em; color: #666; margin-bottom: 4px; }
+.comment-text { color: #ccc; white-space: pre-wrap; }
+
+.comments-input-area {
+    padding: 15px;
+    border-top: 1px solid #333;
+    background: var(--panel-bg);
+    display: flex;
+    gap: 10px;
+}
+.comments-input {
+    flex: 1;
+    background: #000;
+    border: 1px solid #444;
+    color: #fff;
+    padding: 10px;
+    font-family: inherit;
+}
+
+/* --- WIRE COMPOSE DRAWER (Slide-Up) --- */
+
+#wire-compose-drawer {
+    position: absolute;
+    bottom: 0;
+    left: 0;
+    width: 100%;
+    height: 50%; /* Nimmt die halbe Höhe ein */
+    background-color: rgba(18, 18, 18, 0.95); /* Fast undurchsichtiges Schwarz */
+    backdrop-filter: blur(10px); /* Blur-Effekt für den Hintergrund */
+    border-top: 1px solid var(--accent-color);
+    box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.8);
+    z-index: 50; /* Über dem Feed, aber unter Popups */
+
+    display: flex;
+    flex-direction: column;
+
+    /* Animation Setup */
+    transform: translateY(105%); /* Start: Versteckt unter dem Rand */
+    transition: transform 0.4s cubic-bezier(0.19, 1, 0.22, 1); /* Sehr smoother Slide */
+}
+
+/* Klasse zum Anzeigen */
+#wire-compose-drawer.open {
+    transform: translateY(0); /* Fährt hoch */
+}
+
+/* 1. TAGS AREA (Oben) */
+.drawer-header {
+    display: flex;
+    align-items: center;
+    padding: 10px 15px;
+    border-bottom: 1px solid #333;
+    background: rgba(255,255,255,0.02);
+}
+
+.drawer-input-tags {
+    flex: 1;
+    background: transparent;
+    border: none;
+    color: var(--accent-color);
+    font-family: inherit;
+    font-weight: bold;
+    font-size: 0.9em;
+    outline: none;
+    text-transform: uppercase;
+}
+.drawer-input-tags::placeholder { color: #555; font-weight: normal; }
+
+.close-drawer-btn {
+    background: none;
+    border: none;
+    color: #666;
+    cursor: pointer;
+    font-size: 1.2em;
+    padding: 0 10px;
+    transition: color 0.2s;
+}
+.close-drawer-btn:hover { color: #fff; }
+
+/* 2. TEXT AREA (Mitte - Füllt den Platz) */
+.drawer-body {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    padding: 15px;
+}
+
+.drawer-textarea {
+    flex: 1;
+    width: 100%;
+    background: transparent;
+    border: none;
+    color: #e0e0e0;
+    font-family: inherit;
+    font-size: 1.1em;
+    line-height: 1.5;
+    resize: none; /* User darf Größe nicht ändern */
+    outline: none;
+}
+
+/* 3. TOOLBAR (Unten) */
+.drawer-footer {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 10px 15px;
+    border-top: 1px solid #333;
+    background: rgba(0,0,0,0.3);
+}
+
+.drawer-tools {
+    display: flex;
+    align-items: center;
+    gap: 15px;
+}
+
+.tool-btn {
+    background: transparent;
+    border: 1px solid #444;
+    color: #888;
+    padding: 5px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.85em;
+    transition: all 0.2s;
+}
+.tool-btn:hover {
+    border-color: #fff;
+    color: #fff;
+    background: rgba(255,255,255,0.05);
+}
+
+.char-counter {
+    font-size: 0.75em;
+    color: #555;
+    font-family: monospace;
+}
+
+/* --- WIRE MEDIA (Bilder & Videos) --- */
+
+.wire-media-container {
+    margin-top: 10px;
+    margin-bottom: 5px;
+
+    /* Hintergrund weg oder dunkel, falls das Bild Transparenz hat */
+    background: transparent;
+
+    /* WICHTIG: Begrenzte Breite! */
+    max-width: 40%; /* Bild nimmt nur noch 40% der Post-Breite ein */
+
+    /* Optional: Mindestbreite für Mobile, damit es dort nicht zu klein wird */
+    min-width: 250px;
+
+    border-radius: 8px;
+    border: 1px solid #333;
+    overflow: hidden;
+}
+
+.wire-media-img {
+    display: block;
+    width: 100%;       /* Füllt den 40%-Container aus */
+    height: auto;      /* Behält das Seitenverhältnis bei (nichts wird verzerrt) */
+    max-height: 250px;
+    object-fit: contain;
+
+    cursor: zoom-in; /* Zeigt an, dass man es vergrößern kann */
+    background-color: #000; /* Hintergrund für Hochkant-Bilder */
+}
+
+/* Video soll sich genau so verhalten */
+.wire-media-video {
+    width: 100%;
+    height: auto;
+    max-height: 250px;
+    background: #000;
+    display: block;
+}
+
+/* Mobile Optimierung: Auf Handys darf das Bild breiter sein */
+@media (max-width: 700px) {
+    .wire-media-container {
+        max-width: 100%; /* Auf kleinen Screens volle Breite nutzen */
+    }
+}
+
+/* --- FILE DOWNLOAD LINK (Compact & Minimalist) --- */
+.wire-file-link {
+    display: flex;
+    align-items: center;
+
+    /* WICHTIG: Box schrumpft auf Inhaltsgröße */
+    width: fit-content;
+    max-width: 100%; /* Aber niemals breiter als der Post */
+
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid #333;
+
+    padding: 6px 12px; /* Rechts etwas mehr Luft für die Optik */
+    margin-top: 8px;
+    margin-bottom: 2px;
+    border-radius: 6px;
+
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+
+/* Hover Effekt bleibt gleich */
+.wire-file-link:hover {
+    background: rgba(255, 255, 255, 0.08);
+    border-color: #555;
+}
+
+/* Der Rest bleibt auch gleich */
+.file-icon {
+    font-size: 1.2em;
+    margin-right: 10px;
+    color: var(--accent-color);
+    flex-shrink: 0; /* Icon darf nicht gequetscht werden */
+}
+
+.file-info {
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+    justify-content: center;
+    min-width: 0; /* Wichtig für Flexbox Text-Overflow */
+}
+
+.file-name {
+    color: #ddd;
+    font-weight: 500;
+    font-size: 0.9em;
+    font-family: inherit;
+
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.file-meta {
+    color: #666;
+    font-size: 0.7em;
+    margin-top: 1px;
+    font-family: monospace;
+}

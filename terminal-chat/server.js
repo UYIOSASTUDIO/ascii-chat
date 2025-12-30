@@ -130,6 +130,16 @@ let publicRooms = {};
 let privateGroups = {}; // Speicher für geschlossene Gruppen
 let deadDrops = {};
 
+let wirePosts = []; // Speicher für den Feed
+// Aufräum-Interval: Läuft jede Minute und löscht abgelaufene Posts
+setInterval(async () => {
+    // 1. Feed broadcasten (dabei löscht die DB-Funktion automatisch abgelaufene Posts)
+    broadcastWireFeed();
+
+    // 2. Verwaiste Kommentare löschen (deren Posts gerade gelöscht wurden)
+    await db.cleanupOrphanedComments();
+}, 60000);
+
 let activeShares = {};
 
 // --- PROJECT INTELLIGENCE (SECURE DROP) ---
@@ -283,24 +293,63 @@ io.on('connection', (socket) => {
         }
     });
 
-    // --- ADMIN AUTHENTICATION (TOTP) ---
-    socket.on('admin_auth', (token) => {
-        // Wir prüfen den Code (Token) gegen unser Secret
+    // --- ADMIN AUTHENTICATION (NEU: 2-STUFIG) ---
+
+    // STUFE 1: MASTER PASSWORT CHECK
+    socket.on('admin_verify_pass', (password) => {
+        // WICHTIG: Definiere das Admin-Passwort in deiner .env Datei!
+        // Fallback 'admin123' nur nutzen, wenn du es vergessen hast einzutragen.
+        const ADMIN_PASS = process.env.ADMIN_PASSWORD || 'admin123';
+
+        if (password === ADMIN_PASS) {
+            // Session merken: Dieser User hat das Passwort richtig, jetzt fehlt 2FA
+            authSessions[socket.id] = {
+                type: 'ADMIN_LOGIN',
+                step: '2FA'
+            };
+
+            // Client auffordern, den Code einzugeben
+            socket.emit('admin_step_2fa_req');
+        } else {
+            // Fake Delay gegen Brute Force
+            setTimeout(() => {
+                socket.emit('auth_fail', 'ACCESS DENIED: Invalid Administrative Credentials.');
+            }, 1000);
+            serverLog(`Fehlgeschlagener Admin-Passwort-Versuch von ${users[socket.id].username}`);
+        }
+    });
+
+    // STUFE 2: TOTP (2FA) CHECK
+    socket.on('admin_verify_2fa', (token) => {
+        // 1. Prüfen: Hat der User überhaupt das Passwort vorher eingegeben?
+        const session = authSessions[socket.id];
+
+        if (!session || session.type !== 'ADMIN_LOGIN' || session.step !== '2FA') {
+            socket.emit('auth_fail', 'SECURITY VIOLATION: Authentication flow bypassed.');
+            return;
+        }
+
+        // 2. Code prüfen
         const verified = speakeasy.totp.verify({
             secret: adminSecret.base32,
             encoding: 'base32',
             token: token,
-            window: 1 // Erlaubt +/- 30 Sekunden Toleranz (falls Uhrzeit nicht synchron)
+            window: 1
         });
 
         if (verified) {
+            // ERFOLG!
             users[socket.id].isAdmin = true;
-            serverLog(`ACHTUNG: User ${users[socket.id].username} hat sich als ADMIN authentifiziert.`);
-            socket.emit('admin_success', 'ACCESS GRANTED. WELCOME, OPERATOR.');
+            delete authSessions[socket.id]; // Session aufräumen
+
+            serverLog(`ACHTUNG: User ${users[socket.id].username} hat sich als GLOBAL ADMIN authentifiziert.`);
+            socket.emit('admin_success', 'ROOT ACCESS GRANTED. WELCOME, OPERATOR.');
+
+            // Optional: User-Objekt aktualisieren (Name ändern?)
+            // users[socket.id].username = `[ROOT] ${users[socket.id].username}`;
+
         } else {
-            // Fake Error Message zur Abschreckung
-            serverLog(`Fehlgeschlagener Admin-Versuch von ${users[socket.id].username}`);
-            socket.emit('system_message', 'ACCESS DENIED. INCIDENT REPORTED.');
+            socket.emit('system_message', 'ERROR: Invalid 2FA Code.');
         }
     });
 
@@ -1086,6 +1135,35 @@ io.on('connection', (socket) => {
         });
     });
 
+    // --- PROFILE UPDATE (Name & Bio) ---
+    socket.on('update_profile', (data) => {
+        const user = users[socket.id];
+        if (!user) return;
+
+        // XSS Schutz
+        const cleanName = escapeHtml((data.username || '').trim()).substring(0, 20);
+        const cleanBio = escapeHtml((data.bio || '').trim()).substring(0, 100);
+
+        if (cleanName.length > 0) {
+            const oldName = user.username;
+            user.username = cleanName;
+
+            // Wenn User Teil einer Institution ist, Tag behalten!
+            if (user.institution) {
+                user.username = `[${user.institution.tag}] ${cleanName}`;
+                user.originalName = cleanName; // Basis-Name speichern
+            }
+
+            // Bio speichern (neu)
+            user.bio = cleanBio;
+
+            serverLog(`User ${oldName} hat sich umbenannt in ${user.username}`);
+
+            // Optional: Broadcast an Räume, dass sich der Name geändert hat?
+            // Fürs erste reicht es, wenn es bei neuen Nachrichten verwendet wird.
+        }
+    });
+
     // 2. INFO / RECON COMMAND
     socket.on('info_request', (query) => {
         const requester = users[socket.id];
@@ -1110,6 +1188,7 @@ io.on('connection', (socket) => {
                 ip: targetUser.ip,
                 device: targetUser.device,
                 loginTime: targetUser.loginTime,
+                bio: targetUser.bio || 'No bio available.', // <--- NEU
                 status: targetUser.partnerId ? 'ESTABLISHED CONNECTION' : 'IDLE / LISTENING'
             };
 
@@ -1125,15 +1204,20 @@ io.on('connection', (socket) => {
         if (user) {
             user.isGhost = !user.isGhost;
 
-            // Bestätigung an sich selbst
+            // Bestätigung an sich selbst (Text)
             socket.emit('system_message', `STEALTH MODE: ${user.isGhost ? 'ENABLED (Invisible)' : 'DISABLED (Visible)'}`);
 
             // Das Update-Paket
             const updateData = {
                 key: user.key,
-                username: user.username, // Der echte Name (wird gebraucht zum "Enttarnen")
+                username: user.username,
                 isGhost: user.isGhost
             };
+
+            // --- DER FIX: Update auch an MICH SELBST senden! ---
+            // Damit mein Client (Client.js) weiß, dass window.isGhostActive jetzt true/false ist
+            socket.emit('user_ghost_update', updateData);
+            // ---------------------------------------------------
 
             // 1. An alle privaten Partner senden
             if (user.partners && user.partners.length > 0) {
@@ -1183,6 +1267,95 @@ io.on('connection', (socket) => {
         }));
 
         socket.emit('ping_result', { query: query, results: results });
+    });
+
+    // --- PROFILE DETAILS FETCH (Secure Context Menu) ---
+    socket.on('get_profile_details', (reqData) => {
+        // reqData: { targetKey, contextId }
+        const requester = users[socket.id];
+        if (!requester) return;
+
+        const targetUser = Object.values(users).find(u => u.key === reqData.targetKey);
+
+        // Default Response (Fallback / Not Found)
+        let response = {
+            username: "Unknown",
+            bio: "Signal lost.",
+            isGhost: false,
+            isPrivilegedView: false
+        };
+
+        if (targetUser) {
+            // Basis Daten
+            let displayBio = targetUser.bio || "No status set.";
+            let displayName = targetUser.username;
+            let isPrivileged = false;
+
+            // --- RECHTE CHECK ---
+
+            // 1. Bin ich Global Admin?
+            if (requester.isAdmin) {
+                isPrivileged = true;
+            }
+
+                // 2. Bin ich Owner/Mod der aktuellen Gruppe?
+            // Wir prüfen 'contextId', das vom Client kommt (activeChatId)
+            else if (reqData.contextId && reqData.contextId !== 'LOCAL') {
+                const group = privateGroups[reqData.contextId];
+
+                // Wir müssen prüfen, ob BEIDE (Requester und Target) in dieser Gruppe sind.
+                // Ein Mod kann keine Userdaten abfragen, wenn der User gar nicht in seiner Gruppe ist.
+                if (group && group.members.includes(requester.id) && group.members.includes(targetUser.id)) {
+
+                    const isOwner = group.ownerId === requester.id;
+                    const isMod = group.mods.includes(requester.id);
+
+                    if (isOwner || isMod) {
+                        isPrivileged = true;
+                    }
+                }
+            }
+
+            // --- DATEN ZUSAMMENSTELLEN ---
+
+            // FALL A: GHOST MODE AKTIV?
+            if (targetUser.isGhost) {
+                if (isPrivileged) {
+                    // Chef darf alles sehen
+                    response = {
+                        username: `[GHOST] ${targetUser.username}`, // Zeige den echten Namen
+                        bio: displayBio,
+                        isGhost: true,
+                        isPrivilegedView: true,
+                        realName: targetUser.username,
+                        joinTime: targetUser.loginTime, // Oder wann er in die Gruppe kam (haben wir aktuell nicht gespeichert, also LoginTime)
+                        ip: targetUser.ip // Nur für Admin
+                    };
+                } else {
+                    // Normaler User sieht nur Maske
+                    response = {
+                        username: "Anonymous",
+                        bio: "[ENCRYPTED DATA]", // Bio verstecken bei Ghost? Meistens ja.
+                        isGhost: true,
+                        isPrivilegedView: false
+                    };
+                }
+            }
+            // FALL B: KEIN GHOST (Normaler User)
+            else {
+                response = {
+                    username: targetUser.username,
+                    bio: displayBio,
+                    isGhost: false,
+                    isPrivilegedView: isPrivileged, // Auch hier dürfen Admins mehr sehen (IP etc)
+                    realName: targetUser.username,
+                    joinTime: targetUser.loginTime,
+                    ip: targetUser.ip
+                };
+            }
+        }
+
+        socket.emit('profile_details_result', response);
     });
 
     // 5. VERBINDUNGSANFRAGE (Ghost Aware & HQ Compatible)
@@ -3905,6 +4078,164 @@ io.on('connection', (socket) => {
         io.emit('update_system_logs', logs);
     });
 
+    // --- THE WIRE (PERSISTENT VIA SQLITE) ---
+
+    // 1. Post erstellen (Mit File Support FIX)
+    socket.on('wire_post', async (data) => {
+        const user = users[socket.id];
+        if (!user) return;
+
+        // Content Validierung
+        // Wenn kein Text UND kein File da ist -> Abbruch
+        if (!data.content && !data.file) return;
+
+        if (data.content && data.content.length > 5000) return;
+
+        let attachment = null;
+
+        // --- DATEI VERARBEITUNG ---
+        if (data.file && data.file.buffer) {
+            try {
+                // 1. Größe prüfen (Backend Check)
+                const isVideo = data.file.type.startsWith('video/');
+                const limit = isVideo ? 10 * 1024 * 1024 : 4 * 1024 * 1024; // 10MB Video, 4MB Rest
+
+                if (data.file.size > limit) {
+                    socket.emit('system_message', `ERROR: File too large (Limit: ${isVideo ? '10MB' : '4MB'}).`);
+                    return;
+                }
+
+                // 2. Speichern
+                if (!fs.existsSync(UPLOAD_DIR)) fs.mkdirSync(UPLOAD_DIR, { recursive: true });
+
+                const uniquePrefix = Date.now();
+                // Dateinamen säubern (Sicherheit)
+                const cleanName = data.file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
+                const safeFilename = `WIRE_${uniquePrefix}_${cleanName}`;
+                const filePath = path.join(UPLOAD_DIR, safeFilename);
+
+                // --- DER FIX IST HIER: Buffer.from(...) ---
+                // Wir müssen den ArrayBuffer vom Client in einen Node-Buffer umwandeln
+                fs.writeFileSync(filePath, Buffer.from(data.file.buffer));
+
+                // 3. Metadaten erstellen
+                attachment = {
+                    originalName: cleanName,
+                    filename: safeFilename,
+                    path: '/uploads/' + safeFilename,
+                    size: data.file.size,
+                    type: data.file.type,
+                    isMedia: data.file.type.startsWith('image/') || data.file.type.startsWith('video/')
+                };
+
+            } catch (err) {
+                console.error("Wire Upload Error:", err);
+                socket.emit('system_message', 'ERROR: Server upload failed.');
+                return;
+            }
+        }
+
+        const newPost = {
+            id: crypto.randomBytes(8).toString('hex'),
+            authorName: user.username,
+            authorKey: user.key,
+            content: escapeHtml(data.content || ""), // Fallback auf leeren String falls nur Bild
+            tags: (data.tags || []).map(t => escapeHtml(t)),
+            createdAt: Date.now(),
+            expiresAt: Date.now() + (6 * 60 * 60 * 1000),
+            maxExpiresAt: Date.now() + (24 * 60 * 60 * 1000),
+            attachment: attachment // <--- Wird gespeichert
+        };
+
+        // In DB speichern
+        try {
+            await db.createWirePost(newPost);
+            broadcastWireFeed();
+        } catch (e) {
+            console.error("DB Error creating wire post:", e);
+            socket.emit('system_message', 'ERROR: Database rejected the post.');
+        }
+    });
+
+    // 2. Feed anfordern
+    socket.on('wire_load_req', () => {
+        sendWireFeedTo(socket);
+    });
+
+    // 3. Fuel Action
+    socket.on('wire_fuel', async (postId) => {
+        const user = users[socket.id];
+        if (!user) return;
+
+        // Post aus DB holen
+        // Wir nutzen getActiveWirePosts und filtern dann im RAM (einfacher als neue SQL Query)
+        const posts = await db.getActiveWirePosts();
+        const post = posts.find(p => p.id === postId);
+
+        if (post) {
+            const hasFueled = post.fuelers.includes(user.key);
+            const FUEL_TIME = 15 * 60 * 1000;
+
+            if (hasFueled) {
+                post.fuelers = post.fuelers.filter(k => k !== user.key);
+                post.expiresAt -= FUEL_TIME;
+            } else {
+                if (post.expiresAt < post.maxExpiresAt) {
+                    post.expiresAt += FUEL_TIME;
+                    post.fuelers.push(user.key);
+                }
+            }
+
+            // Zurück in DB speichern
+            await db.updateWirePost(post);
+
+            broadcastWireFeed();
+        }
+    });
+
+    // 4. Kommentare laden (Wenn User auf das Icon klickt)
+    socket.on('wire_get_comments_req', async (postId) => {
+        const comments = await db.getWireComments(postId);
+        // Wir müssen prüfen, ob die Autoren noch online sind (für das [DISCONNECTED] Label)
+        const enrichedComments = comments.map(c => {
+            // Online Check
+            const isOnline = Object.values(users).some(u => u.key === c.author_key);
+            return {
+                ...c,
+                isAuthorOnline: isOnline
+            };
+        });
+
+        socket.emit('wire_comments_res', { postId, comments: enrichedComments });
+    });
+
+    // 5. Kommentar posten
+    socket.on('wire_submit_comment', async (data) => {
+        // data: { postId, content }
+        const user = users[socket.id];
+        if (!user || !data.content.trim()) return;
+
+        const commentData = {
+            id: crypto.randomBytes(8).toString('hex'),
+            postId: data.postId,
+            authorName: user.username,
+            authorKey: user.key,
+            content: escapeHtml(data.content)
+        };
+
+        await db.addWireComment(commentData);
+
+        // Feed updaten (damit die Zahl hochgeht)
+        broadcastWireFeed();
+
+        // Dem User (und allen die gerade in den Comments sind) das Update schicken
+        // (Einfachheitshalber laden wir neu)
+        const comments = await db.getWireComments(data.postId);
+        // ... (selbe Logik wie oben für Online-Status könnte man hier nutzen, oder Client lädt nach)
+        io.emit('wire_comments_update', { postId: data.postId });
+    });
+
+
 
 });
 
@@ -4043,5 +4374,56 @@ function broadcastInstitutionUpdate(userId) {
     if (user.currentPub) {
         // FEHLER BEHOBEN: Hier stand vorher 'socket.to', muss aber 'io.to' sein
         io.to(`pub_${user.currentPub}`).emit('user_institution_update', updatePacket);
+    }
+}
+
+// HILFSFUNKTIONEN (Async wegen DB)
+async function sendWireFeedTo(targetSocket) {
+    // 1. Posts aus der DB laden (enthält jetzt bereits 'commentCount')
+    const dbPosts = await db.getActiveWirePosts();
+
+    const targetUser = users[targetSocket.id];
+
+    const enrichedPosts = dbPosts.map(p => {
+        // 2. Online-Status Check
+        // Wir suchen im RAM, ob der Author-Key gerade online ist
+        const isOnline = Object.values(users).some(u => u.key === p.authorKey);
+
+        return {
+            ...p, // Das enthält id, content, tags, expiresAt, commentCount, etc.
+            isAuthorOnline: isOnline,
+
+            // 3. Fuel Check: Hat DIESER User (targetSocket) schon gefuelt?
+            // p.fuelers ist ein Array von Keys ['KEY1', 'KEY2']
+            myFuel: targetUser ? p.fuelers.includes(targetUser.key) : false
+        };
+    });
+
+    targetSocket.emit('wire_update', enrichedPosts);
+}
+
+async function broadcastWireFeed() {
+    const dbPosts = await db.getActiveWirePosts();
+
+    // Wir müssen an ALLE Sockets senden, um 'myFuel' individuell zu berechnen
+    // (Oder wir senden das raw 'fuelers' Array, aber sauberer ist es so:)
+
+    const sockets = await io.fetchSockets();
+
+    for (const socket of sockets) {
+        const targetUser = users[socket.id];
+
+        const enrichedPosts = dbPosts.map(p => {
+            const isOnline = Object.values(users).some(u => u.key === p.authorKey);
+
+            return {
+                ...p,
+                isAuthorOnline: isOnline,
+                // Individueller Fuel Status pro User
+                myFuel: targetUser ? p.fuelers.includes(targetUser.key) : false
+            };
+        });
+
+        socket.emit('wire_update', enrichedPosts);
     }
 }

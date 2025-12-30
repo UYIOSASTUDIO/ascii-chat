@@ -18,7 +18,7 @@ const remoteAudio = document.getElementById('remote-audio');
 const chatList = document.getElementById('chat-list');
 
 // --- GLOBAL VARIABLES ---
-const socket = io();
+const socket = io('http://localhost:3000');
 let myKey = null;
 let myUsername = null;
 let appState = 'BOOTING'; // BOOTING, IDLE, CHATTING, GROUP_CHATTING, PUB_CHATTING

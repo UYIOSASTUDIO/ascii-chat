@@ -38,20 +38,36 @@ html, body {
 }
 
 /* --- HEADER --- */
+/* --- HEADER (Frameless Window Support) --- */
 .top-header {
     display: flex;
     justify-content: space-between;
     align-items: center;
-    padding: 12px 20px;
+
+    /* WICHTIG: Damit man das Fenster ziehen kann */
+    -webkit-app-region: drag;
+
+    /* Platz für Mac "Ampel" (Rot/Gelb/Grün) oben links schaffen */
+    padding: 12px 20px 12px 80px;
+
     background-color: var(--bg-color);
     color: var(--text-muted);
     font-weight: 500;
     border-bottom: var(--border-thick);
-    flex-shrink: 0; /* Header darf nicht schrumpfen */
+    flex-shrink: 0;
     text-transform: uppercase;
     letter-spacing: 2px;
     font-size: 0.9em;
-    height: 50px; /* Feste Höhe für saubere Berechnung */
+    height: 40px;
+    user-select: none; /* Text im Header nicht markierbar machen */
+}
+
+/* WICHTIG: Buttons im Header müssen klickbar bleiben! */
+/* Sonst denkt Electron, man will ziehen, statt klicken. */
+.top-header button,
+.top-header .voice-btn,
+.header-nav {
+    -webkit-app-region: no-drag;
 }
 
 /* ==========================================================================

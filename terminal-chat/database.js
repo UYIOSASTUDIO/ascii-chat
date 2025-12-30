@@ -75,6 +75,33 @@ async function initDB() {
         );
     `);
 
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS wire_posts (
+                                                  id TEXT PRIMARY KEY,
+                                                  author_name TEXT,
+                                                  author_key TEXT,
+                                                  content TEXT,
+                                                  tags TEXT,
+                                                  created_at INTEGER,
+                                                  expires_at INTEGER,
+                                                  max_expires_at INTEGER,
+                                                  fuelers TEXT,
+                                                  discussion_id TEXT,
+                                                  attachment TEXT          -- <--- NEU: JSON String für Datei-Infos
+        )
+    `);
+
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS wire_comments (
+            id TEXT PRIMARY KEY,
+            post_id TEXT,           -- Verknüpfung zum Wire Post
+            author_name TEXT,
+            author_key TEXT,
+            content TEXT,
+            timestamp INTEGER
+        )
+    `);
+
     console.log('[DB] Schema synchronized (Keys enabled).');
 }
 
@@ -276,6 +303,114 @@ async function deleteBlogPost(id) {
     await db.run("DELETE FROM system_blogs WHERE id = ?", [id]);
 }
 
+// =============================================================================
+// THE WIRE FUNCTIONS
+// =============================================================================
+
+// 1. Post erstellen
+async function createWirePost(post) {
+    await db.run(`
+        INSERT INTO wire_posts (
+            id, author_name, author_key, content, tags,
+            created_at, expires_at, max_expires_at, fuelers, discussion_id, attachment
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `, [
+        post.id,
+        post.authorName,
+        post.authorKey,
+        post.content,
+        JSON.stringify(post.tags),
+        post.createdAt,
+        post.expiresAt,
+        post.maxExpiresAt,
+        JSON.stringify([]),
+        null,
+        post.attachment ? JSON.stringify(post.attachment) : null // <--- NEU
+    ]);
+}
+
+// 2. Aktive Posts laden (MIT KORREKTEM MAPPING)
+async function getActiveWirePosts() {
+    const now = Date.now();
+
+    // 1. Aufräumen
+    await db.run('DELETE FROM wire_posts WHERE expires_at < ?', [now]);
+
+    // 2. Laden
+    const rows = await db.all('SELECT * FROM wire_posts ORDER BY created_at DESC');
+
+    const enrichedRows = [];
+
+    for (const row of rows) {
+        const count = await getCommentCount(row.id);
+
+        enrichedRows.push({
+            id: row.id,
+            authorName: row.author_name,
+            authorKey: row.author_key,
+            content: row.content,
+            tags: JSON.parse(row.tags || '[]'),
+
+            // --- HIER WAREN DIE NAMENS-FEHLER ---
+            createdAt: row.created_at,        // WICHTIG: createdAt (nicht created_at)
+            expiresAt: row.expires_at,        // WICHTIG: expiresAt (nicht expires_at)
+            maxExpiresAt: row.max_expires_at, // WICHTIG: maxExpiresAt
+            // ------------------------------------
+
+            fuelers: JSON.parse(row.fuelers || '[]'),
+            discussionId: row.discussion_id,
+            commentCount: count,
+            attachment: row.attachment ? JSON.parse(row.attachment) : null
+        });
+    }
+    return enrichedRows;
+}
+
+// 3. Post Updaten (Fuel & Discussion Link)
+async function updateWirePost(post) {
+    await db.run(`
+        UPDATE wire_posts SET 
+            expires_at = ?,
+            fuelers = ?,
+            discussion_id = ?
+        WHERE id = ?
+    `, [
+        post.expiresAt,
+        JSON.stringify(post.fuelers),
+        post.discussionId,
+        post.id
+    ]);
+}
+
+// =============================================================================
+// WIRE COMMENT FUNCTIONS
+// =============================================================================
+
+async function addWireComment(data) {
+    await db.run(`
+        INSERT INTO wire_comments (id, post_id, author_name, author_key, content, timestamp)
+        VALUES (?, ?, ?, ?, ?, ?)
+    `, [data.id, data.postId, data.authorName, data.authorKey, data.content, Date.now()]);
+}
+
+async function getWireComments(postId) {
+    return await db.all('SELECT * FROM wire_comments WHERE post_id = ? ORDER BY timestamp ASC', [postId]);
+}
+
+// Hilfsfunktion: Zählt Kommentare für einen Post
+async function getCommentCount(postId) {
+    const result = await db.get('SELECT COUNT(*) as count FROM wire_comments WHERE post_id = ?', [postId]);
+    return result ? result.count : 0;
+}
+
+// Cleanup: Löscht Kommentare, deren Post nicht mehr existiert
+async function cleanupOrphanedComments() {
+    await db.run(`
+        DELETE FROM wire_comments 
+        WHERE post_id NOT IN (SELECT id FROM wire_posts)
+    `);
+}
+
 // VERGISS NICHT, DIE NEUEN FUNKTIONEN HIER HINZUZUFÜGEN:
 module.exports = {
     initDB,
@@ -297,5 +432,12 @@ module.exports = {
     getBlogPosts,
     getBlogPostById,
     deleteBlogPost,
-    updateBlogPost
+    updateBlogPost,
+
+    createWirePost,
+    getActiveWirePosts,
+    updateWirePost,
+    addWireComment,
+    getWireComments,
+    cleanupOrphanedComments
 };

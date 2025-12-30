@@ -9,10 +9,17 @@
 <body>
 <header class="top-header">
     <div class="logo">TERMINAL_CHAT</div>
-    <div class="header-nav">
-        <button id="btn-logs" class="voice-btn" onclick="toggleBlogView()">[ SYSTEM LOGS ]</button>
-        <button class="voice-btn" onclick="window.location.reload()">MAIN_SITE</button>
-        <button class="voice-btn" onclick="openFileSystem()">FILE_SYSTEM</button>
+
+    <div class="header-right-side" style="display:flex; align-items:center; gap: 20px;">
+
+        <div class="system-uptime">UPTIME: <span id="session-timer">00:00:00</span></div>
+
+        <div class="header-nav">
+            <button id="btn-wire" class="voice-btn" onclick="toggleWireView()">[ THE WIRE ]</button>
+            <button id="btn-logs" class="voice-btn" onclick="toggleBlogView()">[ SYSTEM LOGS ]</button>
+            <button class="voice-btn" onclick="window.location.reload()">MAIN_SITE</button>
+            <button class="voice-btn" onclick="openFileSystem()">FILE_SYSTEM</button>
+        </div>
     </div>
 </header>
 
@@ -24,6 +31,18 @@
             <input type="text" id="chat-search-input" placeholder="FILTER TARGETS..." autocomplete="off">
         </div>
         <div id="chat-list"></div>
+
+        <div class="user-panel">
+            <div class="user-avatar" id="current-user-avatar">
+                <span>U</span> </div>
+            <div class="user-info">
+                <div class="user-name" id="current-user-name">LOADING...</div>
+                <div class="user-id" id="current-user-id">#Initializing</div>
+            </div>
+            <div class="user-settings-btn" onclick="openSettings()" title="User Settings">
+                ⚙️ </div>
+        </div>
+
     </div>
 
     <div class="resizer" id="drag-left"></div>
@@ -34,6 +53,72 @@
         </div>
 
         <div id="output"></div>
+
+        <div id="wire-view" style="display: none; flex: 1; flex-direction: column; overflow: hidden; width: 100%; height: 100%;">
+
+            <div class="wire-controls" style="padding: 15px; border-bottom: var(--border-thick); display: flex; justify-content: flex-end; align-items: center; background: var(--panel-bg);">
+
+                <button class="voice-btn" style="border-color: var(--accent-color); color: var(--accent-color);" onclick="openWireModal()">
+                    [ + BROADCAST ]
+                </button>
+            </div>
+
+            <div id="wire-feed-list" class="wire-feed-container">
+            </div>
+
+            <div id="wire-compose-drawer">
+
+                <div class="drawer-header">
+                    <input type="text" id="wire-tags" class="drawer-input-tags" placeholder="ENTER FREQUENCIES (TAGS)...">
+                    <button class="close-drawer-btn" onclick="closeWireModal()">▼</button>
+                </div>
+
+                <div class="drawer-body">
+                    <textarea id="wire-content" class="drawer-textarea" maxlength="2000" placeholder="Broadcast message..."></textarea>
+
+                    <div id="wire-preview-area" style="display:none; padding-top: 10px;">
+                        <div style="position:relative; display:inline-block;">
+                            <div id="wire-preview-content"></div>
+                            <button onclick="clearWireUpload()" style="position:absolute; top:-10px; right:-10px; background:red; color:white; border:none; border-radius:50%; width:20px; height:20px; cursor:pointer; font-weight:bold;">×</button>
+                        </div>
+                    </div>
+
+                </div>
+
+                <div class="drawer-footer">
+                    <div class="drawer-tools">
+                        <input type="file" id="wire-file-upload" style="display: none;">
+                        <input type="file" id="wire-img-upload" accept="image/*" style="display: none;">
+
+                        <button class="tool-btn" onclick="document.getElementById('wire-file-upload').click()" title="Attach Data">
+                            📁 FILE
+                        </button>
+                        <button class="tool-btn" onclick="document.getElementById('wire-img-upload').click()" title="Attach Visual">
+                            📷 IMG
+                        </button>
+                        <span class="char-counter"><span id="char-count">0</span>/2000</span>
+                    </div>
+
+                    <button class="voice-btn" style="border-color: var(--accent-color); color: var(--accent-color);" onclick="submitWirePost()">
+                        [ TRANSMIT ]
+                    </button>
+                </div>
+            </div>
+
+        </div>
+
+        <div id="wire-comments-view">
+            <div class="comments-header">
+                <button class="voice-btn" onclick="closeWireComments()">[ < BACK ]</button>
+                <span style="font-weight:bold; color:#fff;">THREAD DETAILS</span>
+            </div>
+            <div id="comments-list" class="comments-list">
+            </div>
+            <div class="comments-input-area">
+                <input type="text" id="comment-input" class="comments-input" placeholder="Write a reply...">
+                <button class="voice-btn" onclick="submitWireComment()">[ REPLY ]</button>
+            </div>
+        </div>
 
         <div class="input-area">
             <div id="autocomplete-list" class="autocomplete-items"></div>
@@ -79,6 +164,80 @@
         </div>
     </div>
 
+</div>
+
+<div id="settings-modal" class="modal-overlay">
+    <div class="modal-window">
+        <div class="modal-header">
+            <h2>USER SETTINGS</h2>
+            <button class="close-modal" onclick="closeSettings()">×</button>
+        </div>
+
+        <div class="modal-content">
+            <div class="setting-group">
+                <label>SESSION IDENTITY (ID):</label>
+                <div class="readonly-field" id="modal-id">LOADING...</div>
+                <div class="sub-text">Unique Session ID (Cannot be changed)</div>
+            </div>
+
+            <div class="setting-group">
+                <label>CODENAME:</label>
+                <input type="text" id="modal-username" class="modal-input" maxlength="20">
+            </div>
+
+            <div class="setting-group">
+                <label>DESCRIPTION / BIO:</label>
+                <textarea id="modal-bio" class="modal-input" rows="3" placeholder="No status set..."></textarea>
+            </div>
+
+            <div class="setting-group row-group">
+                <div>
+                    <label>CURRENT ROLE:</label>
+                    <div id="modal-role" class="role-badge">USER</div>
+                </div>
+
+                <div class="toggle-wrapper">
+                    <label>GHOST MODE:</label>
+                    <label class="switch">
+                        <input type="checkbox" id="modal-ghost-toggle" onchange="toggleGhostFromModal()">
+                        <span class="slider round"></span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="modal-footer">
+                <div id="login-time-display">Logged in: --:--</div>
+                <button class="voice-btn" onclick="saveProfile()">[ SAVE CHANGES ]</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div id="user-popup" class="user-popup" style="display: none;">
+    <div class="popup-header">
+        <div class="popup-avatar" id="popup-avatar">U</div>
+        <div class="popup-title">
+            <div id="popup-name" class="popup-name">Loading...</div>
+            <div class="popup-id-row">
+                <span id="popup-id">ID: ...</span>
+                <span class="copy-icon" onclick="copyPopupId()" title="Copy ID">📋</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="popup-body">
+        <div class="popup-section">
+            <label>BIO / STATUS:</label>
+            <div id="popup-bio" class="popup-text">...</div>
+        </div>
+
+        <div id="popup-meta" class="popup-section" style="display:none; border-top: 1px dashed #444; padding-top:10px;">
+            <label style="color:#ff3333;">[ADMIN INTEL]:</label>
+            <div id="popup-realname" class="popup-text">Real Name: ...</div>
+            <div id="popup-jointime" class="popup-text">Session Start: ...</div>
+            <div id="popup-ip" class="popup-text" style="font-size:0.7em; color:#666;">IP: [REDACTED]</div>
+        </div>
+    </div>
 </div>
 
 <script src="/socket.io/socket.io.js"></script>

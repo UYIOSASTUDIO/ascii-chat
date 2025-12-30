@@ -19,6 +19,65 @@ const chatList = document.getElementById('chat-list');
 
 // --- GLOBAL VARIABLES ---
 const socket = io();
+
+
+// =============================================================================
+// PROTOCOL: SCORCHED EARTH (DATA WIPER)
+// =============================================================================
+
+function nukeSystem(trigger = "manual") {
+    console.log(`>>> INITIATING DATA PURGE (${trigger})...`);
+
+    // 1. Lokalen Speicher komplett vernichten
+    try {
+        localStorage.clear();
+        sessionStorage.clear();
+    } catch (e) { console.error("Storage Wipe Error", e); }
+
+    // 2. Cookies töten (falls vorhanden)
+    document.cookie.split(";").forEach((c) => {
+        document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/");
+    });
+
+    // 3. Wenn es ein Notfall ist (Panic), RAM leeren durch Redirect
+    if (trigger === "panic") {
+        document.body.innerHTML = '<div style="background:#000;width:100%;height:100vh;color:#f00;display:flex;justify-content:center;align-items:center;font-family:monospace;font-size:2em;">SYSTEM HALTED. DATA PURGED.</div>';
+        // Kurze Pause für den Effekt, dann ins Nirvana
+        setTimeout(() => {
+            window.location.href = "about:blank";
+        }, 500);
+    }
+}
+
+// AUTOMATISCHE REINIGUNG BEIM START
+// Stellt sicher, dass wir IMMER mit einem sauberen Zustand beginnen,
+// selbst wenn der Browser vorher abgestürzt ist.
+nukeSystem("startup");
+
+// PANIC TRIGGER LISTENER (3x ESC in 1 Sekunde)
+let escCount = 0;
+let escTimer = null;
+
+document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape') {
+        escCount++;
+
+        // Timer starten beim ersten Drücken
+        if (!escTimer) {
+            escTimer = setTimeout(() => {
+                escCount = 0;
+                escTimer = null;
+            }, 1000); // Man hat 1 Sekunde Zeit
+        }
+
+        // Bei 3 Klicks -> BOOM
+        if (escCount >= 3) {
+            nukeSystem("panic");
+        }
+    }
+});
+
+
 let myKey = null;
 let myUsername = null;
 let appState = 'BOOTING'; // BOOTING, IDLE, CHATTING, GROUP_CHATTING, PUB_CHATTING
@@ -131,10 +190,13 @@ window.handleSimpleCopy = (key) => {
     // KEIN socket.emit() -> Kein "Access Denied" Fehler mehr!
 };
 
-// Wenn dieser Tab geschlossen oder neu geladen wird...
+// WENN TAB GESCHLOSSEN ODER NEU GELADEN WIRD
 window.addEventListener('beforeunload', () => {
-    // ...senden wir den Befehl an alle anderen Tabs: "Schaltet euch ab!"
+    // 1. Anderen Tabs (Filesystem) sagen, sie sollen sterben
     lifeCycleChannel.postMessage({ type: 'MASTER_DISCONNECT' });
+
+    // 2. Alle Daten löschen
+    nukeSystem("exit");
 });
 
 function openFileSystem() {
@@ -160,52 +222,22 @@ function openFileSystem() {
 function getDynamicName(name, key) {
     if (!key) return name;
 
-    // --- 1. ADMIN / MOD / OWNER CHECK (Darf Reveal nutzen) ---
-    const currentChat = myChats[activeChatId];
-    let canUnmask = false;
-
-    if (iamAdmin) {
-        canUnmask = true;
-    }
-    else if (currentChat && currentChat.type === 'group') {
-        if (currentChat.role === 'OWNER' || currentChat.role === 'MOD' || currentChat.role === 'ADMIN') {
-            canUnmask = true;
-        }
-    }
-
-    // --- 2. STYLE CHECK (Institutionen) ---
+    // --- STYLE CHECK (Institutionen) ---
     const instStyle = institutionStyles[key];
-    let customStyle = '';
-    let title = "Click to copy ID"; // Standard Tooltip
+    let customStyle = 'cursor: pointer;'; // Immer klickbar jetzt
 
     if (instStyle) {
-        // Neon-Style für Institutionen
-        customStyle = `color: ${instStyle.color}; text-shadow: 0 0 5px ${instStyle.color}; font-weight: bold;`;
-        title = "OFFICIAL INSTITUTION ACCOUNT";
+        customStyle += `color: ${instStyle.color}; text-shadow: 0 0 5px ${instStyle.color}; font-weight: bold;`;
     }
 
-    // --- 3. LOGIK ENTSCHEIDUNG ---
+    // --- NEU: IMMER openUserPopup aufrufen ---
+    // Wir übergeben 'event' damit wir wissen, wo die Maus ist
+    const action = `window.openUserPopup(event, '${key}')`;
 
-    // FALL A: Berechtigte User (Admin/Mod)
-    if (canUnmask) {
-        const adminTitle = "ADMIN TOOL: Reveal Identity & Copy ID";
-        const action = `window.handleNameClick('${key}')`; // Nutzt die Reveal-Funktion
-        // Fügt Admin-Klasse hinzu für evtl. CSS, plus Custom Style falls Institution
-        return `<span class="dynamic-name dynamic-name-admin" style="${customStyle}" data-key="${key}" onclick="${action}" title="${adminTitle}">${name}</span>`;
-    }
+    // Ghost Prüfung für lokalen Namen (nur kosmetisch im Chat-Flow)
+    let displayName = name;
 
-    // FALL B: Normale User sieht GHOST ("Anonymous")
-    // WICHTIG: Kein Klick-Handler! ID darf nicht kopiert werden.
-    if (name === 'Anonymous') {
-        return `<span class="dynamic-name" style="${customStyle}; cursor: default;" data-key="${key}" title="Encrypted Identity">${name}</span>`;
-    }
-
-    // FALL C: Normale User sieht normalen User oder Institution
-    // Darf ID kopieren, aber nicht revealan (handleSimpleCopy)
-    const action = `window.handleSimpleCopy('${key}')`;
-    const style = customStyle || "cursor: pointer;"; // Pointer nur wenn klickbar
-
-    return `<span class="dynamic-name" style="${style}" data-key="${key}" onclick="${action}" title="${title}">${name}</span>`;
+    return `<span class="dynamic-name" style="${customStyle}" data-key="${key}" onclick="${action}">${displayName}</span>`;
 }
 
 // =============================================================================
@@ -595,7 +627,6 @@ function getSystemStats() {
 }
 
 async function runBootSequence() {
-    localStorage.removeItem('fs_groups');
     input.disabled = true;
     promptSpan.className = 'prompt-hidden';
     const stats = getSystemStats();
@@ -714,7 +745,7 @@ if (inputField) {
         if (inputField.value === '') inputField.style.height = 'auto';
 
         // History Reset (nur beim Chatten)
-        if (e.isTrusted && viewMode !== 'BLOG') {
+        if (e.isTrusted && viewMode !== 'BLOG' && viewMode !== 'WIRE') {
             historyIndex = commandHistory.length;
         }
 
@@ -722,14 +753,34 @@ if (inputField) {
         if (viewMode === 'BLOG') {
             filterBlogPosts(inputField.value);
         }
+
+        // --- NEU: LIVE FILTER FÜR WIRE ---
+        if (viewMode === 'WIRE') {
+            const term = inputField.value.toLowerCase().trim();
+
+            if (!term) {
+                // Wenn leer -> Zeige alles (Cache)
+                renderWireFeed(wireFeedCache);
+                return;
+            }
+
+            // Filtern
+            const filtered = wireFeedCache.filter(p => {
+                return p.content.toLowerCase().includes(term) ||
+                    p.authorName.toLowerCase().includes(term) ||
+                    p.tags.some(t => t.toLowerCase().includes(term));
+            });
+            renderWireFeed(filtered);
+        }
+        // --------------------------------
     });
 
     // --- C) KEYDOWN EVENT (AKTIONEN: Senden & History) ---
     inputField.addEventListener('keydown', async (e) => {
 
-        // BLOG SEARCH MODE: Enter blockieren (Suche ist live)
-        if (viewMode === 'BLOG') {
-            if (e.key === 'Enter') e.preventDefault();
+        // BLOG & WIRE MODE: Enter blockieren (Suche ist live)
+        if (viewMode === 'BLOG' || viewMode === 'WIRE') {
+            if (e.key === 'Enter') e.preventDefault(); // Nichts tun
             return;
         }
 
@@ -797,6 +848,36 @@ if (inputField) {
 }
 
 async function handleInput(text) {
+
+    // --- NEU: ADMIN LOGIN FLOW ---
+    if (appState === 'ADMIN_PASS') {
+        if (text === 'cancel') {
+            printLine('Admin login aborted.', 'system-msg');
+            appState = 'IDLE';
+            promptSpan.textContent = '>';
+            promptSpan.className = 'prompt-default';
+            return;
+        }
+        // Passwort an Server senden
+        printLine('Verifying credentials...', 'system-msg');
+        socket.emit('admin_verify_pass', text);
+        return;
+    }
+
+    if (appState === 'ADMIN_2FA') {
+        if (text === 'cancel') {
+            printLine('Admin login aborted.', 'system-msg');
+            appState = 'IDLE';
+            promptSpan.textContent = '>';
+            promptSpan.className = 'prompt-default';
+            return;
+        }
+        // 2FA Code an Server senden
+        socket.emit('admin_verify_2fa', text);
+        return;
+    }
+    // -----------------------------
+
     if (appState === 'BOOTING') {
         // 1. SOFORT-CHECK: Ist der Name gültig?
         if (text.startsWith('/') || text.trim().length === 0 || text.length > 20) {
@@ -1301,30 +1382,32 @@ async function handleInput(text) {
             const param = args[1]; // Das Argument nach /auth
 
             if (!param) {
-                printLine('USAGE: /auth [ADMIN_TOKEN] OR [INSTITUTION_ID]', 'error-msg');
+                printLine('USAGE: /auth [INSTITUTION_TAG]', 'error-msg');
                 return;
             }
 
-            // LOGIK-WEICHE:
-            // Wir prüfen mit Regex (Regular Expression), ob es genau 6 Ziffern sind.
-            // Google Authenticator Codes sind immer 6-stellige Zahlen.
-            const isAdminToken = /^\d{6}$/.test(param);
-
-            if (isAdminToken) {
-                // 1. ALTER WEG: Es sieht aus wie ein Code -> Versuche Admin Login
-                socket.emit('admin_auth', param);
-            } else {
-                // 2. NEUER WEG: Es ist Text (z.B. "MI6") -> Starte den HQ-Prozess
-                printLine(`Connecting to secure gateway [${param.toUpperCase()}]...`, 'system-msg');
-                socket.emit('auth_init', param);
-            }
+            // WICHTIG: Keine Regex-Prüfung mehr!
+            // /auth ist JETZT NUR NOCH für Institutionen.
+            printLine(`Connecting to secure gateway [${param.toUpperCase()}]...`, 'system-msg');
+            socket.emit('auth_init', param);
         }
 
         // --- ADMIN COMMANDS ---
         else if (cmd === '/admin') {
             const sub = args[1];
 
-            if (sub === 'requests') {
+            if (sub === 'auth') {
+                printLine(' ', '');
+                printLine('⚠️  SYSTEM ADMINISTRATOR ACCESS  ⚠️', 'error-msg');
+                printLine('Enter Master Password:', 'system-msg');
+
+                appState = 'ADMIN_PASS';
+                promptSpan.textContent = 'ADMIN-PASS>';
+                promptSpan.className = 'prompt-error';
+                return;
+            }
+
+            else if (sub === 'requests') {
                 printLine('Fetching pending applications...', 'system-msg');
                 socket.emit('admin_list_requests');
             }
@@ -1335,14 +1418,14 @@ async function handleInput(text) {
                     return;
                 }
                 printLine(`Authorizing Request ID [${id}]...`, 'system-msg');
-                socket.emit('admin_approve_request', id);
+                socket.emit('admin_approve_request', args[2]);
             }
             // Deine alten Befehle (ban, broadcast) kannst du hier lassen...
             else if (sub === 'broadcast') {
                 socket.emit('admin_broadcast', args.slice(2).join(' '));
             }
             else {
-                printLine('ADMIN TOOLS: requests, approve [ID], broadcast [MSG]', 'system-msg');
+                printLine('ADMIN TOOLS: auth, requests, approve [ID], broadcast [MSG]', 'system-msg');
             }
         }
 
@@ -1719,8 +1802,13 @@ socket.on('system_message', (msg) => {
 
 // 1. REGISTRIERUNG (Hier fehlte die ID Anzeige!)
 socket.on('registered', (data) => {
-    myKey = data.key;       // WICHTIG: Key speichern
+    myKey = data.key;
     myUsername = data.username;
+
+    // --- NEU HINZUFÜGEN ---
+    sessionStartTime = Date.now();
+    updateUserUI(); // Füllt die Leiste unten links
+    // ----------------------
 
     // Status ändern, falls wir noch im Boot-Screen sind
     if (appState === 'BOOTING') {
@@ -1827,62 +1915,37 @@ socket.on('incoming_request', (data) => {
     }
 });
 
-// GHOST STATUS UPDATE (Deep Fix: Attribute & Klick-Schutz)
+// GHOST STATUS UPDATE (Fix: Immer Popup nutzen & Style erhalten)
 socket.on('user_ghost_update', (data) => {
     // data: { key, username, isGhost }
     const newDisplayName = data.isGhost ? 'Anonymous' : data.username;
 
-    // Hilfsfunktion: Baut den öffnenden <span ...> Tag passend zum Chat-Kontext neu
-    // (Entscheidet ob klickbar oder nicht)
-    const getNewTagHtml = (chatId) => {
-        // 1. Berechtigung prüfen (Darf ich in DIESEM Chat enttarnen?)
-        let canUnmask = false;
-        if (iamAdmin) canUnmask = true;
-        else {
-            const c = myChats[chatId];
-            if (c && c.type === 'group' && ['OWNER', 'MOD', 'ADMIN'].includes(c.role)) {
-                canUnmask = true;
-            }
-        }
+    // Hilfsfunktion: Baut den Tag neu - JETZT IMMER MIT POPUP
+    const getNewTagHtml = () => {
 
-        // 2. Style prüfen (Institutionen)
+        // 1. Style prüfen (Institutionen)
         const instStyle = institutionStyles[data.key];
-        let customStyle = '';
-        let title = "Click to copy ID";
+        let customStyle = 'cursor: pointer;';
 
         if (instStyle) {
-            customStyle = `color: ${instStyle.color}; text-shadow: 0 0 5px ${instStyle.color}; font-weight: bold;`;
-            title = "OFFICIAL INSTITUTION ACCOUNT";
+            customStyle += `color: ${instStyle.color}; text-shadow: 0 0 5px ${instStyle.color}; font-weight: bold;`;
         }
 
-        // 3. Tag bauen
+        // 2. Aktion: IMMER das Popup öffnen
+        // Wir übergeben 'event', damit das Popup an der Mausposition aufgeht
+        const action = `window.openUserPopup(event, '${data.key}')`;
 
-        // FALL A: Berechtigte (Admin/Owner) -> Immer klickbar (Reveal)
-        if (canUnmask) {
-            const action = `window.handleNameClick('${data.key}')`;
-            return `<span class="dynamic-name dynamic-name-admin" style="${customStyle}" data-key="${data.key}" onclick="${action}" title="ADMIN: Reveal">`;
-        }
-
-        // FALL B: Normale User + GHOST -> NICHT KLICKBAR
-        if (newDisplayName === 'Anonymous') {
-            // WICHTIG: Kein onclick, Cursor default
-            return `<span class="dynamic-name" style="${customStyle}; cursor: default;" data-key="${data.key}" title="Encrypted Identity">`;
-        }
-
-        // FALL C: Normale User + Sichtbar -> Klickbar (Copy Only)
-        const action = `window.handleSimpleCopy('${data.key}')`;
-        const style = customStyle || "cursor: pointer;";
-        return `<span class="dynamic-name" style="${style}" data-key="${data.key}" onclick="${action}" title="${title}">`;
+        // 3. HTML zurückgeben
+        return `<span class="dynamic-name" style="${customStyle}" data-key="${data.key}" onclick="${action}">`;
     };
 
     // 1. LIVE DOM UPDATE (Nur im aktuellen Chat sichtbar)
     const visibleElements = document.querySelectorAll(`.dynamic-name[data-key="${data.key}"]`);
     if (visibleElements.length > 0) {
-        // Wir holen den Tag passend zum aktuellen Chat (activeChatId)
-        const newOpenTag = getNewTagHtml(activeChatId);
+        const newOpenTag = getNewTagHtml();
 
         visibleElements.forEach(el => {
-            // WICHTIG: Wir ersetzen das ganze Element (outerHTML), damit Attribute wie onclick verschwinden!
+            // Wir ersetzen das Element komplett, um alte Event-Listener loszuwerden
             el.outerHTML = `${newOpenTag}${newDisplayName}</span>`;
         });
     }
@@ -1890,16 +1953,16 @@ socket.on('user_ghost_update', (data) => {
     // 2. HISTORY SPEICHER UPDATE (Für alle Chats im Hintergrund)
     Object.values(myChats).forEach(c => {
         if (c.history && c.history.length > 0) {
-            // Tag passend zum jeweiligen Chat Kontext generieren
-            const newTagForChat = getNewTagHtml(c.id);
+            const newTag = getNewTagHtml();
 
             c.history = c.history.map(line => {
                 // Regex sucht den ganzen Span: (<span ...>)(Inhalt)(</span>)
+                // Wir suchen spezifisch nach dem Span mit dieser data-key
                 const regex = new RegExp(`(<span [^>]*data-key="${data.key}"[^>]*>)(.*?)(</span>)`, 'g');
 
                 return line.replace(regex, (match, oldOpen, content, close) => {
-                    // Wir tauschen den Öffnungs-Tag (Attribute) UND den Inhalt (Name) aus
-                    return `${newTagForChat}${newDisplayName}${close}`;
+                    // Wir tauschen den Öffnungs-Tag (mit dem neuen onclick) UND den Namen aus
+                    return `${newTag}${newDisplayName}${close}`;
                 });
             });
         }
@@ -1912,6 +1975,20 @@ socket.on('user_ghost_update', (data) => {
         renderChatList();
         if (activeChatId === data.key) {
             promptSpan.textContent = `SECURE/${newDisplayName}>`;
+        }
+    }
+
+    // 4. Eigener Status (für Settings Modal)
+    if (data.key === myKey) {
+        window.isGhostActive = data.isGhost;
+
+        // Avatar Update
+        if (data.isGhost) {
+            document.getElementById('current-user-avatar').style.backgroundColor = '#666';
+            document.getElementById('current-user-avatar').innerHTML = '👻';
+        } else {
+            document.getElementById('current-user-avatar').style.backgroundColor = 'var(--accent-color)';
+            updateUserUI(); // Reset to Initial
         }
     }
 });
@@ -2850,6 +2927,17 @@ socket.on('admin_kick_owner_start', (data) => {
     promptSpan.className = 'prompt-error';
 });
 
+// ADMIN AUTH: PASSWORT WAR KORREKT -> JETZT 2FA
+socket.on('admin_step_2fa_req', () => {
+    appState = 'ADMIN_2FA';
+
+    printLine('Credentials accepted.', 'success-msg');
+    printLine('Enter 2FA Code:', 'my-msg');
+
+    promptSpan.textContent = 'ADMIN-2FA>';
+    promptSpan.className = 'prompt-highlight';
+});
+
 // --- PRIVATE LEAVE EVENTS ---
 
 // Fall A: Ich habe /leave getippt
@@ -2955,6 +3043,7 @@ socket.on('promo_update', (list) => {
 // ADMIN LOGIN ERFOLGREICH
 socket.on('admin_success', (msg) => {
     iamAdmin = true;
+
     printLine(' ', '');
     printLine('----------------------------------------', 'system-msg');
     printLine(msg, 'system-msg'); // "ACCESS GRANTED..."
@@ -2963,6 +3052,29 @@ socket.on('admin_success', (msg) => {
     // UI Update: Prompt rot machen und Tag hinzufügen
     promptSpan.textContent = `ADMIN/${myUsername}>`;
     promptSpan.className = 'prompt-error';
+
+    // --- DER FIX: STATE RESET ---
+    // Wir müssen prüfen, wo wir vor dem Login waren, und den Status wiederherstellen.
+
+    if (activeChatId === 'LOCAL' || activeChatId === 'HQ_INBOX') {
+        appState = 'IDLE';
+    }
+    else {
+        // Wir sind in einem Chat, also müssen wir den Chat-Modus wieder aktivieren
+        const currentChat = myChats[activeChatId];
+
+        if (currentChat) {
+            if (currentChat.type === 'group') appState = 'GROUP_CHATTING';
+            else if (currentChat.type === 'pub') appState = 'PUB_CHATTING';
+            else appState = 'CHATTING'; // Privat
+        } else {
+            appState = 'IDLE'; // Fallback
+        }
+    }
+    // ----------------------------
+
+    // Kleines Update für das User-Panel (falls wir das schon eingebaut haben)
+    if (typeof updateUserUI === 'function') updateUserUI();
 });
 
 // GLOBAL BROADCAST EMPFANGEN (Das hat auch gefehlt!)
@@ -4668,10 +4780,11 @@ const COMMAND_LIST = [
     { cmd: "/drop pickup [ID]", desc: "Pickup Dead Drop" },
 
     // ADMIN
-    { cmd: "/admin requests", desc: "List applications" },
-    { cmd: "/admin approve [ID]", desc: "Approve application" },
-    { cmd: "/admin ban [ID]", desc: "Global server ban" },
-    { cmd: "/broadcast [MSG]", desc: "Global server alert" }
+    { cmd: "/admin auth", desc: "System Administrator Login" },
+    { cmd: "/admin requests", desc: "List applications", adminOnly: true },
+    { cmd: "/admin approve [ID]", desc: "Approve application", adminOnly: true },
+    { cmd: "/admin ban [ID]", desc: "Global server ban", adminOnly: true },
+    { cmd: "/broadcast [MSG]", desc: "Global server alert", adminOnly: true }
 ];
 
 // Variablen für Navigation
@@ -4707,6 +4820,11 @@ function initAutocomplete() {
         const needle = val.toLowerCase();
 
         COMMAND_LIST.forEach(item => {
+
+            if (item.adminOnly && !iamAdmin) {
+                return;
+            }
+
             // Filter: Startet mit Eingabe?
             if (item.cmd.toLowerCase().startsWith(needle)) {
 
@@ -4716,7 +4834,10 @@ function initAutocomplete() {
                 const matchPart = item.cmd.substr(0, val.length);
                 const restPart = item.cmd.substr(val.length);
 
-                div.innerHTML = `<span><strong>${matchPart}</strong>${restPart}</span> <span class="cmd-desc">${item.desc}</span>`;
+                // Optional: Admin Befehle rot markieren für Admins
+                const extraStyle = item.adminOnly ? 'color:#ff5555;' : '';
+
+                div.innerHTML = `<span style="${extraStyle}"><strong>${matchPart}</strong>${restPart}</span> <span class="cmd-desc">${item.desc}</span>`;
 
                 // Klick Event
                 div.addEventListener("click", function() {
@@ -4902,6 +5023,808 @@ initResizers();
 
 // Initialisieren
 initAutocomplete();
+
+// =============================================================================
+// USER PROFILE & SETTINGS MODULE
+// =============================================================================
+
+let sessionStartTime = Date.now();
+let userBio = ""; // Speichern wir lokal
+
+// 1. UPDATE TIMER (Läuft jede Sekunde)
+setInterval(() => {
+    const now = Date.now();
+    const diff = now - sessionStartTime;
+
+    // Umrechnung in HH:MM:SS
+    const hrs = Math.floor(diff / (1000 * 60 * 60));
+    const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+    const secs = Math.floor((diff % (1000 * 60)) / 1000);
+
+    const timeStr =
+        String(hrs).padStart(2, '0') + ':' +
+        String(mins).padStart(2, '0') + ':' +
+        String(secs).padStart(2, '0');
+
+    // Update in der Sidebar
+    const timerEl = document.getElementById('session-timer');
+    if (timerEl) timerEl.textContent = timeStr;
+}, 1000);
+
+// 2. GUI UPDATE (Sidebar Footer aktualisieren)
+function updateUserUI() {
+    if (!myKey) return; // Noch nicht eingeloggt
+
+    // Avatar Initiale
+    const initial = (myUsername || 'U').charAt(0).toUpperCase();
+    document.getElementById('current-user-avatar').innerHTML = `<span>${initial}</span>`;
+
+    // Name
+    document.getElementById('current-user-name').textContent = myUsername;
+
+    // ID (Formatieren für Lesbarkeit)
+    document.getElementById('current-user-id').textContent = `#${myKey}`;
+
+    // Role (Optional, Farbe ändern)
+    // Kann erweitert werden wenn wir window.myRole speichern
+}
+
+// 3. MODAL ÖFFNEN
+window.openSettings = () => {
+    const modal = document.getElementById('settings-modal');
+    modal.classList.add('open');
+
+    // Werte füllen
+    document.getElementById('modal-id').textContent = myKey;
+    document.getElementById('modal-username').value = myUsername;
+    document.getElementById('modal-bio').value = userBio;
+
+    // Login Time
+    const date = new Date(sessionStartTime);
+    document.getElementById('login-time-display').textContent = `Session started: ${date.toLocaleTimeString()}`;
+
+    // Role Ermittlung (Visuell)
+    let role = "USER";
+    let color = "#888";
+    if (iamAdmin) { role = "SYSTEM ADMIN"; color = "#ff3333"; }
+    else if (window.myInstitutionTag) { role = `AGENT [${window.myInstitutionTag}]`; color = "#00ff00"; }
+
+    const roleBadge = document.getElementById('modal-role');
+    roleBadge.textContent = role;
+    roleBadge.style.backgroundColor = color;
+
+    // Ghost Toggle Status setzen
+    // Wir prüfen, ob wir aktuell Ghost sind (Variable aus deinem bestehenden Code?)
+    // Falls nicht vorhanden, fügen wir eine globale Variable hinzu oder nutzen DOM Check.
+    // Wir nehmen an 'window.isGhostActive' (das bauen wir gleich ein)
+    document.getElementById('modal-ghost-toggle').checked = window.isGhostActive || false;
+};
+
+window.closeSettings = () => {
+    document.getElementById('settings-modal').classList.remove('open');
+};
+
+// 4. SPEICHERN
+window.saveProfile = () => {
+    const newName = document.getElementById('modal-username').value.trim();
+    const newBio = document.getElementById('modal-bio').value.trim();
+
+    if (!newName) {
+        alert("Username cannot be empty.");
+        return;
+    }
+
+    // Lokal updaten
+    myUsername = newName;
+    userBio = newBio;
+
+    // Server informieren
+    socket.emit('update_profile', {
+        username: newName,
+        bio: newBio
+    });
+
+    updateUserUI(); // Footer aktualisieren
+    closeSettings();
+    printLine('(i) Profile updated locally and on server.', 'system-msg');
+};
+
+// 5. GHOST TOGGLE (Vom Modal aus)
+window.toggleGhostFromModal = () => {
+    const toggle = document.getElementById('modal-ghost-toggle');
+    // Wir nutzen den existierenden Socket Befehl
+    socket.emit('toggle_ghost');
+    // UI Feedback kommt über den Socket 'system_message' zurück
+};
+
+// 6. EVENT LISTENER FÜR REGISTERED (Damit UI beim Start gefüllt wird)
+// Suche in deinem existierenden Code socket.on('registered'...) und füge das am Ende hinzu:
+// updateUserUI();
+// sessionStartTime = Date.now();
+
+// =============================================================================
+// USER POPUP SYSTEM
+// =============================================================================
+
+let currentPopupKey = null;
+
+window.openUserPopup = (e, key) => {
+    e.stopPropagation(); // Verhindert, dass der Klick das Popup sofort wieder schließt
+    currentPopupKey = key;
+
+    const popup = document.getElementById('user-popup');
+
+    // 1. Positionieren (neben der Maus)
+    // Wir justieren es etwas, damit es nicht aus dem Bild rutscht
+    let x = e.clientX + 10;
+    let y = e.clientY + 10;
+
+    // Screen Rand Check (einfach)
+    if (x + 280 > window.innerWidth) x = e.clientX - 290;
+    if (y + 200 > window.innerHeight) y = e.clientY - 210;
+
+    popup.style.left = x + 'px';
+    popup.style.top = y + 'px';
+    popup.style.display = 'block';
+
+    // 2. Reset / Loading State
+    document.getElementById('popup-name').textContent = "Loading...";
+    document.getElementById('popup-name').style.color = '#fff'; // Reset Farbe
+    document.getElementById('popup-id').textContent = `ID: ${key}`;
+    document.getElementById('popup-bio').textContent = "...";
+    document.getElementById('popup-avatar').innerText = "?";
+    document.getElementById('popup-meta').style.display = 'none'; // Admin Bereich aus
+
+    // 3. Daten vom Server anfordern
+    // Wir senden auch die aktuelle ChatID mit, damit der Server weiß,
+    // ob wir im selben Gruppenraum sind (für Mod-Rechte).
+    socket.emit('get_profile_details', { targetKey: key, contextId: activeChatId });
+};
+
+// Antwort vom Server empfangen
+socket.on('profile_details_result', (data) => {
+    // data: { username, bio, isGhost, realName, joinTime, ip, isPrivilegedView }
+
+    // Prüfen ob das Popup noch für diesen User offen ist
+    if (!currentPopupKey) return;
+
+    // 1. AVATAR LOGIK
+    const initial = (data.username || '?').charAt(0).toUpperCase();
+    document.getElementById('popup-avatar').innerText = initial;
+
+    if (data.isGhost) {
+        document.getElementById('popup-name').style.color = '#888'; // Grau für Ghost
+        if (!data.isPrivilegedView) {
+            document.getElementById('popup-avatar').style.backgroundColor = '#444';
+        }
+    } else {
+        document.getElementById('popup-avatar').style.backgroundColor = 'var(--accent-color)';
+        document.getElementById('popup-name').style.color = '#fff'; // Reset Farbe
+    }
+
+    // 2. NAME & BIO SETZEN
+    document.getElementById('popup-name').textContent = data.username;
+    document.getElementById('popup-bio').textContent = data.bio || "No description.";
+
+    // --- FIX 1: ID MASKIEREN (GHOST SECURITY) ---
+    // Wenn der User ein Ghost ist UND ich keine Rechte habe -> ID verstecken!
+    const idSpan = document.getElementById('popup-id');
+    const copyIcon = document.querySelector('.copy-icon');
+
+    if (data.isGhost && !data.isPrivilegedView) {
+        idSpan.textContent = "ID: [ENCRYPTED]";
+        idSpan.style.color = "#666"; // Dunkler machen
+        copyIcon.style.display = 'none'; // Kopieren verbieten!
+    } else {
+        idSpan.textContent = `ID: ${currentPopupKey}`;
+        idSpan.style.color = ""; // Reset Farbe
+        copyIcon.style.display = 'inline-block'; // Kopieren erlauben
+    }
+    // ---------------------------------------------
+
+    // --- FIX 2: ADMIN BEREICH AUFRÄUMEN ---
+    const metaDiv = document.getElementById('popup-meta');
+
+    if (data.isPrivilegedView) {
+        metaDiv.style.display = 'block';
+
+        // Wir verstecken die "Real Identity" Zeile, da der Name oben schon echt ist!
+        // (Wir greifen das Element direkt, falls es im HTML noch steht)
+        const realNameEl = document.getElementById('popup-realname');
+        if(realNameEl) realNameEl.style.display = 'none';
+
+        const time = new Date(data.joinTime).toLocaleString();
+        document.getElementById('popup-jointime').textContent = `First Seen: ${time}`;
+
+        // IP (nur für Global Admin interessant, sonst ausblenden)
+        if (iamAdmin && data.ip) {
+            document.getElementById('popup-ip').textContent = `IP: ${data.ip}`;
+            document.getElementById('popup-ip').style.display = 'block';
+        } else {
+            document.getElementById('popup-ip').style.display = 'none';
+        }
+    } else {
+        metaDiv.style.display = 'none';
+    }
+});
+
+// Copy Funktion für das Icon
+window.copyPopupId = () => {
+    if (currentPopupKey) {
+        navigator.clipboard.writeText(currentPopupKey);
+        // Kleines visuelles Feedback
+        const idSpan = document.getElementById('popup-id');
+        const oldText = idSpan.textContent;
+        idSpan.textContent = "COPIED!";
+        idSpan.style.color = "#0f0";
+        setTimeout(() => {
+            idSpan.textContent = oldText;
+            idSpan.style.color = "";
+        }, 1000);
+    }
+};
+
+// Schließen beim Klick woanders
+document.addEventListener('click', (e) => {
+    const popup = document.getElementById('user-popup');
+    // Wenn Klick NICHT im Popup war
+    if (!popup.contains(e.target)) {
+        popup.style.display = 'none';
+        currentPopupKey = null;
+    }
+});
+
+// =============================================================================
+// THE WIRE (FEED SYSTEM)
+// =============================================================================
+
+let wireFeedCache = [];
+
+// 1. View Toggler (Unified Input Version)
+window.toggleWireView = () => {
+    const wire = document.getElementById('wire-view');
+    const output = document.getElementById('output');
+    const inputField = document.getElementById('command-input'); // Das untere Feld
+
+    if (wire.style.display === 'none') {
+        // --- WIRE EINSCHALTEN ---
+        viewMode = 'WIRE'; // Globaler Modus-Wechsel
+
+        wire.style.display = 'flex';
+        output.style.display = 'none';
+
+        // Daten holen
+        socket.emit('wire_load_req');
+
+        // Button Highlight
+        document.getElementById('btn-wire').classList.add('active');
+        document.getElementById('btn-wire').style.borderColor = 'var(--accent-color)';
+
+        // --- INPUT LEISTE UMBAUEN ---
+        inputField.value = '';
+        inputField.placeholder = "TYPE KEYWORDS TO FILTER FREQUENCIES...";
+        inputField.focus();
+
+        // Prompt anpassen
+        promptSpan.setAttribute('data-prev-prompt', promptSpan.textContent);
+        promptSpan.textContent = 'WIRE/SCAN>';
+        promptSpan.className = 'prompt-warn'; // Gelb für "Scanner Modus"
+
+    } else {
+        // --- WIRE AUSSCHALTEN (ZURÜCK ZUM CHAT) ---
+        viewMode = 'CHAT';
+
+        wire.style.display = 'none';
+        output.style.display = 'block';
+
+        document.getElementById('btn-wire').classList.remove('active');
+        document.getElementById('btn-wire').style.borderColor = '';
+
+        // Input Reset
+        inputField.value = '';
+        inputField.placeholder = ""; // Standard Placeholder kommt durch switchChat wieder
+
+        // Prompt Reset
+        const oldPrompt = promptSpan.getAttribute('data-prev-prompt');
+        if (oldPrompt) promptSpan.textContent = oldPrompt;
+        promptSpan.className = 'prompt-default';
+
+        // Zurück zum aktuellen Chat
+        switchChat(activeChatId);
+    }
+};
+
+// 2. Post Absenden
+window.submitWirePost = () => {
+    const content = document.getElementById('wire-content').value.trim();
+    const tagsRaw = document.getElementById('wire-tags').value.trim();
+
+    if(!content) {
+        alert("Payload empty.");
+        return;
+    }
+
+    const tags = tagsRaw.split(' ').filter(t => t.startsWith('#'));
+
+    socket.emit('wire_post', { content, tags });
+
+    closeWireModal();
+    document.getElementById('wire-content').value = '';
+    document.getElementById('wire-tags').value = '';
+};
+
+// 3. Feed Update Empfangen (Rendern)
+socket.on('wire_update', (posts) => {
+    wireFeedCache = posts; // Speichern für Suche
+    renderWireFeed(posts);
+});
+
+function renderWireFeed(posts) {
+    const list = document.getElementById('wire-feed-list');
+
+    // Leeren State behandeln
+    if (posts.length === 0) {
+        list.innerHTML = '<div style="text-align:center; color:#666; margin-top:50px;">NO SIGNAL DETECTED.</div>';
+        return;
+    }
+    // Falls vorher der "Empty"-Text da war, Liste leeren
+    if (list.children.length > 0 && list.firstElementChild.innerText === "NO SIGNAL DETECTED.") {
+        list.innerHTML = '';
+    }
+
+    const processedIds = new Set();
+
+    posts.forEach(p => {
+        processedIds.add(p.id);
+        let card = document.getElementById(`post-${p.id}`);
+
+        // --- BERECHNUNGEN ---
+        const now = Date.now();
+        const timeLeftMs = p.expiresAt - now;
+        let ttlDisplay = "EXPIRED";
+        if (timeLeftMs > 0) {
+            const h = Math.floor(timeLeftMs / (1000 * 60 * 60));
+            const m = Math.floor((timeLeftMs % (1000 * 60 * 60)) / (1000 * 60));
+            ttlDisplay = `${h}h ${m}m`;
+        }
+
+        const isFueled = p.fuelers.includes(myKey);
+        const activeFuelClass = isFueled ? 'fueled' : '';
+        const fuelBtnClass = `wire-action action-fuel ${activeFuelClass}`;
+
+        // ID Status Berechnung
+        let idDisplayClass = p.isAuthorOnline ? "wire-id" : "wire-id offline";
+        let idDisplayText = p.isAuthorOnline ? `ID: ${p.authorKey}` : `ID: [DISCONNECTED]`;
+
+        // HIER WAR DER FEHLER: Wir definieren die Variable jetzt explizit!
+        let idDisplay = `<span class="${idDisplayClass}">${idDisplayText}</span>`;
+
+        // ============================================================
+        // FALL A: UPDATE VORHANDENER POST (DOM Patching)
+        // ============================================================
+        if (card) {
+            // 1. Fuel Update
+            const fuelBtn = card.querySelector('.action-fuel');
+            if (fuelBtn) {
+                fuelBtn.className = fuelBtnClass;
+                const timeSpan = fuelBtn.querySelector('.fuel-timer');
+                if (timeSpan && timeSpan.innerText !== ttlDisplay) {
+                    timeSpan.innerText = ttlDisplay;
+                }
+            }
+
+            // 2. Comment Update
+            const commentSpan = card.querySelector('.action-chat span');
+            if (commentSpan && commentSpan.innerText !== String(p.commentCount)) {
+                commentSpan.innerText = p.commentCount;
+            }
+
+            // 3. Online Status Update
+            const idSpan = card.querySelector('.wire-id');
+            if (idSpan) {
+                if (idSpan.className !== idDisplayClass) idSpan.className = idDisplayClass;
+                if (idSpan.innerText !== idDisplayText) idSpan.innerText = idDisplayText;
+            }
+
+            list.appendChild(card); // Position sichern
+        }
+
+            // ============================================================
+            // FALL B: NEUEN POST ERSTELLEN
+        // ============================================================
+        else {
+            card = document.createElement('div');
+            card.className = 'wire-card';
+            card.id = `post-${p.id}`;
+
+            // Attachment
+            let attachmentHtml = '';
+            if (p.attachment) {
+                const att = p.attachment;
+                if (att.type.startsWith('image/')) {
+                    attachmentHtml = `<div class="wire-media-container"><img src="${att.path}" class="wire-media-img" loading="lazy" onclick="window.open('${att.path}', '_blank')" title="Click to view full size"></div>`;
+                } else if (att.type.startsWith('video/')) {
+                    attachmentHtml = `<div class="wire-media-container"><video src="${att.path}" class="wire-media-video" controls preload="metadata"></video></div>`;
+                } else {
+                    const sizeKB = (att.size / 1024).toFixed(1) + ' KB';
+                    attachmentHtml = `<div class="wire-file-link" onclick="window.confirmDownload('${att.originalName}', '${att.path}')"><div class="file-icon">💾</div><div class="file-info"><div class="file-name">${att.originalName}</div><div class="file-meta">DATA_PACKET // ${sizeKB} // CLICK_TO_EXTRACT</div></div></div>`;
+                }
+            }
+
+            const timeDisplay = new Date(p.createdAt).toLocaleTimeString([], {hour:'2-digit', minute:'2-digit'});
+
+            // HTML String (Jetzt funktioniert ${idDisplay}!)
+            card.innerHTML = `
+                <div class="wire-header">
+                    <span class="wire-name">${p.authorName}</span>
+                    ${idDisplay} 
+                    <span class="wire-time">${timeDisplay}</span>
+                </div>
+                
+                <div class="wire-tags">
+                    ${p.tags.map(t => `<span class="wire-tag">${t}</span>`).join(' ')}
+                </div>
+                
+                <div class="wire-body" id="body-${p.id}" onclick="window.toggleWirePost(this)">${formatWireContent(p.content)}</div>
+                
+                <div class="wire-show-more" id="more-${p.id}" onclick="window.toggleWireExpansion('${p.id}')">show more ⋁</div>
+                
+                ${attachmentHtml}
+                
+                <div class="wire-footer">
+                    <div class="${fuelBtnClass}" onclick="window.triggerWireFuel('${p.id}')">
+                        ⚡ <span class="fuel-timer">${ttlDisplay}</span>
+                    </div>
+                    <div class="wire-action action-chat" onclick="window.openWireComments('${p.id}')">
+                        💬 <span>${p.commentCount}</span>
+                    </div>
+                </div>
+            `;
+
+            list.appendChild(card);
+
+            // Show More Logik (Nach dem Rendern messen)
+            setTimeout(() => {
+                const bodyEl = document.getElementById(`body-${p.id}`);
+                const moreEl = document.getElementById(`more-${p.id}`);
+                // Toleranz für 3 Zeilen (ca. 4.5em ~ 65px) + 10px Buffer
+                if (bodyEl && bodyEl.scrollHeight > bodyEl.clientHeight + 10) {
+                    moreEl.style.display = 'block';
+                } else if (bodyEl) {
+                    bodyEl.classList.add('fully-visible');
+                    bodyEl.style.cursor = 'default';
+                    if(moreEl) moreEl.style.display = 'none';
+                }
+            }, 0);
+        }
+    });
+
+    // Cleanup: Alte Posts entfernen
+    const currentCards = Array.from(list.children);
+    currentCards.forEach(child => {
+        if (child.id && child.id.startsWith('post-')) {
+            const rawId = child.id.replace('post-', '');
+            if (!processedIds.has(rawId)) {
+                child.remove();
+            }
+        }
+    });
+}
+
+// HELPER: Post ausklappen und wieder einklappen
+window.toggleWireExpansion = (id) => {
+    const body = document.getElementById(`body-${id}`);
+    const btn = document.getElementById(`more-${id}`);
+
+    // Prüfen: Ist er schon offen?
+    const isExpanded = body.classList.contains('expanded');
+
+    if (isExpanded) {
+        // EINKLAPPEN
+        body.classList.remove('expanded');
+        btn.innerHTML = 'show more ⋁';
+        // Optional: Nach oben scrollen, falls der Post sehr lang war?
+        // body.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    } else {
+        // AUSKLAPPEN
+        body.classList.add('expanded');
+        btn.innerHTML = 'show less ⋀';
+    }
+};
+
+// Helper: Text Formatierung (Links, Newlines)
+function formatWireContent(text) {
+    return text.replace(/\n/g, '<br>');
+}
+
+// HELPER: Nur einen Post gleichzeitig ausklappen
+window.toggleWirePost = (element) => {
+    // --- NEU: ABBRUCH WENN NICHT ERWEITERBAR ---
+    if (!element.classList.contains('expandable')) return;
+    // -------------------------------------------
+
+    // 1. Merken, ob der angeklickte Post gerade offen war
+    const wasOpen = element.classList.contains('expanded');
+
+    // 2. ALLE offenen Posts im Feed schließen (Reset)
+    const allExpanded = document.querySelectorAll('.wire-body.expanded');
+    allExpanded.forEach(el => el.classList.remove('expanded'));
+
+    // 3. Öffnen
+    if (!wasOpen) {
+        element.classList.add('expanded');
+    }
+};
+
+// 4. Interaktionen
+window.triggerWireFuel = (postId) => {
+    socket.emit('wire_fuel', postId);
+};
+
+window.triggerWireChat = (postId) => {
+    // 1. Post im Cache finden, um die GroupID zu bekommen
+    const post = wireFeedCache.find(p => p.id === postId);
+
+    // UI Helper: Wire ausblenden, Chat einblenden
+    const showChatUI = () => {
+        const wire = document.getElementById('wire-view');
+        const output = document.getElementById('output');
+        wire.style.display = 'none';
+        output.style.display = 'block';
+        document.getElementById('btn-wire').classList.remove('active');
+        document.getElementById('btn-wire').style.borderColor = '';
+    };
+
+    if (post && post.discussionId) {
+        // CHECK: Habe ich diesen Chat schon?
+        if (myChats[post.discussionId]) {
+            // JA -> Einfach nur wechseln! Keine Server-Anfrage.
+            showChatUI();
+            switchChat(post.discussionId);
+            return; // HIER STOPPEN WIR
+        }
+    }
+
+    // NEIN (oder Chat existiert noch gar nicht) -> Server anfunken
+    socket.emit('wire_join_chat', postId);
+
+    // UI schon mal umschalten (der Rest passiert wenn 'group_joined_success' kommt)
+    showChatUI();
+};
+
+// Modals
+window.openWireModal = () => {
+    const drawer = document.getElementById('wire-compose-drawer');
+    drawer.classList.add('open');
+
+    // Fokus direkt ins Textfeld setzen für schnelles Tippen
+    setTimeout(() => {
+        document.getElementById('wire-content').focus();
+    }, 400); // Warten bis Animation fertig ist
+};
+
+window.closeWireModal = () => {
+    const drawer = document.getElementById('wire-compose-drawer');
+    drawer.classList.remove('open');
+};
+
+// Character Counter
+document.getElementById('wire-content').addEventListener('input', function() {
+    document.getElementById('char-count').textContent = this.value.length;
+});
+
+let currentCommentPostId = null;
+let currentWireFile = null; // Speichert die Datei temporär
+
+// 1. EVENT LISTENERS FÜR DIE INPUTS
+// Bild Upload
+document.getElementById('wire-img-upload').addEventListener('change', function(e) {
+    handleWireFileSelect(e.target.files[0], 'media');
+});
+// File Upload
+document.getElementById('wire-file-upload').addEventListener('change', function(e) {
+    handleWireFileSelect(e.target.files[0], 'file');
+});
+
+// 2. DATEI VERARBEITUNG & VORSCHAU
+function handleWireFileSelect(file, mode) {
+    if (!file) return;
+
+    // LIMIT CHECK
+    const isVideo = file.type.startsWith('video/');
+    const limit = isVideo ? 10 * 1024 * 1024 : 4 * 1024 * 1024; // 10MB Video, 4MB Rest
+
+    if (file.size > limit) {
+        alert(`ERROR: File too large. Limit: ${isVideo ? '10MB' : '4MB'}`);
+        return;
+    }
+
+    currentWireFile = file; // Speichern
+
+    // VORSCHAU BAUEN
+    const previewArea = document.getElementById('wire-preview-area');
+    const previewContent = document.getElementById('wire-preview-content');
+    previewArea.style.display = 'block';
+
+    if (file.type.startsWith('image/')) {
+        const url = URL.createObjectURL(file);
+        previewContent.innerHTML = `<img src="${url}" style="max-height: 150px; border: 1px solid #333; border-radius: 4px;">`;
+    }
+    else if (file.type.startsWith('video/')) {
+        const url = URL.createObjectURL(file);
+        previewContent.innerHTML = `<video src="${url}" style="max-height: 150px; border: 1px solid #333; border-radius: 4px;" controls></video>`;
+    }
+    else {
+        // Generisches File
+        previewContent.innerHTML = `
+            <div style="background: rgba(255,255,255,0.1); padding: 10px; border: 1px dashed #666; color: #fff; font-family: monospace;">
+                📄 ${file.name} <br> <span style="font-size:0.8em; color:#aaa;">(${(file.size/1024).toFixed(1)} KB)</span>
+            </div>
+        `;
+    }
+}
+
+// 3. UPLOAD LÖSCHEN (X-Button)
+window.clearWireUpload = () => {
+    currentWireFile = null;
+    document.getElementById('wire-preview-area').style.display = 'none';
+    document.getElementById('wire-preview-content').innerHTML = '';
+    // Inputs resetten, damit man dasselbe File nochmal wählen kann
+    document.getElementById('wire-img-upload').value = '';
+    document.getElementById('wire-file-upload').value = '';
+};
+
+// 4. SENDEN (Angepasst)
+window.submitWirePost = () => {
+    const content = document.getElementById('wire-content').value.trim();
+    const tagsRaw = document.getElementById('wire-tags').value.trim();
+
+    if (!content && !currentWireFile) {
+        alert("Payload empty. Write text or attach data.");
+        return;
+    }
+
+    const tags = tagsRaw.split(' ').filter(t => t.startsWith('#'));
+
+    // Daten vorbereiten
+    const postData = {
+        content: content,
+        tags: tags,
+        file: null
+    };
+
+    if (currentWireFile) {
+        // Wir lesen die Datei ein und senden sie als Buffer
+        const reader = new FileReader();
+        reader.onload = function(evt) {
+            postData.file = {
+                buffer: evt.target.result,
+                name: currentWireFile.name,
+                type: currentWireFile.type,
+                size: currentWireFile.size
+            };
+            socket.emit('wire_post', postData);
+            resetWireDrawer(); // Aufräumen
+        };
+        reader.readAsArrayBuffer(currentWireFile);
+    } else {
+        // Nur Text
+        socket.emit('wire_post', postData);
+        resetWireDrawer();
+    }
+};
+
+function resetWireDrawer() {
+    closeWireModal();
+    document.getElementById('wire-content').value = '';
+    document.getElementById('wire-tags').value = '';
+    clearWireUpload();
+}
+
+// 5. DOWNLOAD CONFIRMATION (Security Prompt)
+window.confirmDownload = (filename, path) => {
+    // Custom Hacker Prompt (window.confirm ist einfach, aber wir können es stylen)
+    const choice = confirm(
+        `⚠ SECURITY WARNING ⚠\n\n` +
+        `File: ${filename}\n\n` +
+        `Downloading unknown files can compromise your terminal security.\n` +
+        `Are you sure you want to proceed with the extraction?`
+    );
+
+    if (choice) {
+        // Download erzwingen via unsichtbarem Link
+        const link = document.createElement('a');
+        link.href = path;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+    }
+};
+
+// Öffnet den Thread-View
+window.openWireComments = (postId) => {
+    currentCommentPostId = postId;
+
+    // UI Switch
+    document.getElementById('wire-view').style.display = 'none';
+    document.getElementById('wire-comments-view').style.display = 'flex';
+    document.getElementById('comments-list').innerHTML = '<div style="padding:10px; color:#666;">Loading transmission...</div>';
+
+    // Daten holen
+    socket.emit('wire_get_comments_req', postId);
+};
+
+// Schließt den Thread-View
+window.closeWireComments = () => {
+    currentCommentPostId = null;
+    document.getElementById('wire-comments-view').style.display = 'none';
+    document.getElementById('wire-view').style.display = 'flex';
+};
+
+// Character Counter (ID ist gleich geblieben, aber sicherheitshalber:)
+const wireContentArea = document.getElementById('wire-content');
+if (wireContentArea) {
+    wireContentArea.addEventListener('input', function() {
+        document.getElementById('char-count').textContent = this.value.length;
+    });
+}
+
+// Comments empfangen
+socket.on('wire_comments_res', (data) => {
+    if (currentCommentPostId !== data.postId) return; // Falscher Thread
+
+    const list = document.getElementById('comments-list');
+    list.innerHTML = '';
+
+    if (data.comments.length === 0) {
+        list.innerHTML = '<div style="padding:20px; text-align:center; color:#444;">No replies yet. Be the first.</div>';
+        return;
+    }
+
+    data.comments.forEach(c => {
+        const time = new Date(c.timestamp).toLocaleTimeString();
+
+        let idDisplay = `[ID: ${c.author_key}]`;
+        if (!c.isAuthorOnline) idDisplay = `<span style="color:#ff3333;">[DISCONNECTED]</span>`;
+
+        const item = document.createElement('div');
+        item.className = 'comment-item';
+        item.innerHTML = `
+            <div class="comment-meta">
+                <span style="font-weight:bold; color:#fff;">${c.author_name}</span> 
+                ${idDisplay} 
+                <span style="float:right;">${time}</span>
+            </div>
+            <div class="comment-text">${formatWireContent(c.content)}</div>
+        `;
+        list.appendChild(item);
+    });
+
+    // Automatisch nach unten scrollen
+    list.scrollTop = list.scrollHeight;
+});
+
+// Comment absenden
+window.submitWireComment = () => {
+    const input = document.getElementById('comment-input');
+    const content = input.value.trim();
+    if (!content || !currentCommentPostId) return;
+
+    socket.emit('wire_submit_comment', {
+        postId: currentCommentPostId,
+        content: content
+    });
+
+    input.value = '';
+};
+
+// Live Update für Comments (wenn man drin ist)
+socket.on('wire_comments_update', (data) => {
+    if (currentCommentPostId === data.postId) {
+        socket.emit('wire_get_comments_req', data.postId);
+    }
+});
 
 // --- INIT ---
 runBootSequence();
