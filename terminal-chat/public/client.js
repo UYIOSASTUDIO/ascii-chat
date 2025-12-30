@@ -355,71 +355,88 @@ function printLine(text, className = '') {
 
 // Wir fügen 'role' als optionalen Parameter hinzu
 function registerChat(id, name, type, cryptoKey = null, role = 'MEMBER') {
-    if (myChats[id]) {
-        if (cryptoKey) myChats[id].key = cryptoKey;
-        // Update Rolle falls vorhanden
-        if (role !== 'MEMBER') myChats[id].role = role;
+    const safeId = String(id); // WICHTIG: Immer String benutzen!
+
+    if (myChats[safeId]) {
+        if (cryptoKey) myChats[safeId].key = cryptoKey;
+        if (role !== 'MEMBER') myChats[safeId].role = role;
         return;
     }
-    myChats[id] = {
-        id: id,
+
+    myChats[safeId] = {
+        id: safeId,
         name: name,
         type: type,
         history: [],
         unread: 0,
         key: cryptoKey,
-        role: role // <--- Speichern (MEMBER, MOD, OWNER)
+        role: role
     };
     renderChatList();
 }
 
-function switchChat(id) {
+// Wir fügen 'force' als zweiten Parameter hinzu (Standard: false)
+function switchChat(id, force = false) {
+    const safeId = String(id); // Auch hier: ID normalisieren
+
+    // --- NAVIGATIONS-CHECK ---
+    if (viewMode !== 'CHAT') {
+        activeChatId = safeId;
+        switchMainView('CHAT');
+        return;
+    }
 
     if (!myUsername) {
-        // Fokus zurück in das Namens-Feld zwingen
-        document.getElementById('command-input').focus();
-        return; // ABBRUCH: Funktion hier beenden!
+        const inp = document.getElementById('command-input');
+        if(inp) inp.focus();
+        return;
     }
-    // -----------------------------------------------
 
-    // 1. Definition der Variable 'chat' (WICHTIG für den Fix)
-    const chat = myChats[id];
+    // Existenz Check
+    const chat = myChats[safeId];
+    if (safeId !== 'LOCAL' && !chat) return;
 
-    // Sicherheits-Check: Abbruch, wenn Chat nicht existiert (außer es ist LOCAL)
-    if (id !== 'LOCAL' && !chat) return;
+    // Abbruch, wenn schon aktiv (außer Force)
+    if (activeChatId === safeId && !force) {
+        document.getElementById('command-input').focus();
+        return;
+    }
 
-    // 2. State setzen
-    activeChatId = id;
-    viewMode = 'CHAT'; // Zwingt Ansicht zurück auf Chat (falls man aus Dashboard kommt)
-
+    // State setzen
+    activeChatId = safeId;
     if (chat) chat.unread = 0;
 
-    // 3. Input Feld zurücksetzen
+    // --- UI SICHERSTELLEN ---
+    // Das hier hat gefehlt: Wir zwingen das Chat-Fenster sichtbar!
+    const chatOutput = document.getElementById('output');
+    const wireView = document.getElementById('wire-view');
+
+    if (chatOutput.style.display === 'none') {
+        chatOutput.style.display = 'block';
+        if (wireView) wireView.style.display = 'none';
+    }
+
+    // --- INPUT SETUP ---
     const inputField = document.getElementById('command-input');
-    inputField.value = "";
+    const promptSpan = document.getElementById('prompt');
+
     inputField.disabled = false;
     inputField.focus();
 
-
-    // 4. Logik für Placeholder und Prompts
-
-    // FALL A: HQ INBOX
-    if (id === 'HQ_INBOX') {
+    // Placeholder & Prompt Logik
+    if (safeId === 'HQ_INBOX') {
         inputField.placeholder = "Search Secure Inbox...";
-
         if (window.isHqLoggedIn) {
             promptSpan.textContent = 'HQ/SEARCH>';
             promptSpan.className = 'prompt-error';
         }
     }
-    // FALL B: LOCAL SHELL
-    else if (id === 'LOCAL') {
+    else if (safeId === 'LOCAL') {
         inputField.placeholder = "Enter command...";
         promptSpan.textContent = '>';
         promptSpan.className = 'prompt-default';
         appState = 'IDLE';
     }
-    // FALL C: NORMALE CHATS (Variable 'chat' ist hier sicher vorhanden)
     else if (chat) {
         const pName = chat.name || chat.id;
         promptSpan.className = 'prompt-default';
@@ -435,32 +452,29 @@ function switchChat(id) {
             appState = 'PUB_CHATTING';
         }
         else {
-            // Private
             inputField.placeholder = `Message ${pName}...`;
             promptSpan.textContent = `SECURE/${pName}>`;
             appState = 'CHATTING';
         }
-
-        updateVoicePanelVisibility();
+        if (typeof updateVoicePanelVisibility === 'function') updateVoicePanelVisibility();
     }
 
-    // 5. Rendering
     renderChatList();
 
-    output.innerHTML = '';
+    // --- RENDERING ---
+    chatOutput.innerHTML = ''; // ALTES LÖSCHEN
 
-    // History laden (Fallback für LOCAL, falls kein Chat-Objekt existiert)
     const historySource = chat ? chat.history : (myChats['LOCAL'] ? myChats['LOCAL'].history : []);
 
     if (historySource) {
         historySource.forEach(html => {
             const div = document.createElement('div');
             div.innerHTML = html;
-            output.appendChild(div);
+            chatOutput.appendChild(div);
         });
     }
 
-    output.scrollTop = output.scrollHeight;
+    chatOutput.scrollTop = chatOutput.scrollHeight;
 }
 
 // Chat komplett aus dem Speicher löschen (Mit Voice-Cleanup)
@@ -569,11 +583,16 @@ function renderChatList() {
 
         chats.forEach(chat => {
             const item = document.createElement('div');
-            // Wichtig: internal Chats bekommen einen speziellen Look (optional)
+            // Wichtig: internal Chats bekommen einen speziellen Look
             const extraClass = chat.type === 'hq_internal' ? 'chat-internal' : '';
 
             item.className = `chat-item ${extraClass} ${chat.id === activeChatId ? 'active' : ''}`;
-            item.onclick = () => switchChat(chat.id);
+
+            // --- DER FIX: ---
+            // Wir fügen 'true' (force) hinzu.
+            // Damit wird der Chat IMMER neu geladen, wenn du draufklickst.
+            // Das behebt das "Nichts passiert"-Gefühl.
+            item.onclick = () => switchChat(chat.id, true);
 
             // Spezielles Icon für Internal
             let display = getChatDisplayName(chat);
@@ -2328,25 +2347,37 @@ socket.on('group_join_request_alert', (data) => {
 
 // 6. GRUPPEN EVENTS
 socket.on('group_joined_success', async (data) => {
-    // --- FIX: Passwort-Modus beenden ---
+    // Cleanup
     if (appState === 'ENTERING_GROUP_PASSWORD') {
         pendingJoinGroupId = null;
-        // appState wird gleich durch switchChat gesetzt, das passt.
     }
-    // -----------------------------------
 
     updateLocalGroups(data.id, 'add');
 
     let key = data.key ? await importRoomKey(data.key) : null;
     const name = data.name || `Group_${data.id}`;
+    const safeId = String(data.id); // String ID
 
-    registerChat(data.id, name, 'group', key, data.role);
-    switchChat(data.id);
+    // 1. Chat registrieren
+    registerChat(safeId, name, 'group', key, data.role);
 
-    printToChat(data.id, '----------------------------------------');
-    printToChat(data.id, `>>> SECURE GROUP ESTABLISHED: ${name} (ID: ${data.id})`, 'system-msg');
-    printToChat(data.id, `>>> YOUR ROLE: ${data.role}`, 'system-msg');
-    printToChat(data.id, '----------------------------------------');
+    // 2. Ziel setzen
+    activeChatId = safeId;
+
+    // 3. Ansicht wechseln (falls wir nicht da sind)
+    if (viewMode !== 'CHAT') {
+        // switchMainView ruft automatisch switchChat(activeChatId, true) auf!
+        switchMainView('CHAT');
+    } else {
+        // Wenn wir schon im Chat-Modus sind, direkt laden
+        switchChat(safeId, true);
+    }
+
+    // Willkommens-Nachrichten
+    printToChat(safeId, '----------------------------------------');
+    printToChat(safeId, `>>> SECURE GROUP ESTABLISHED: ${name} (ID: ${safeId})`, 'system-msg');
+    printToChat(safeId, `>>> YOUR ROLE: ${data.role}`, 'system-msg');
+    printToChat(safeId, '----------------------------------------');
 
     updateVoiceUI('idle');
 });
@@ -3172,28 +3203,38 @@ socket.on('ban_notification', (data) => {
 // =============================================================================
 
 function updateVoiceUI(state, callerName = '') {
+    // Elemente sicher referenzieren
+    const vStatus = document.getElementById('voice-status');
+    const vControls = document.getElementById('voice-controls');
+    const vVisualizer = document.querySelector('.voice-visualizer');
+
+    // WICHTIG: Wenn die Elemente im HTML fehlen, sofort aufhören!
+    if (!vStatus || !vControls || !vVisualizer) return;
+
     if (appState !== 'CHATTING') {
-        voiceStatus.textContent = 'SYSTEM IDLE';
-        voiceStatus.classList.remove('active', 'alert');
-        voiceVisualizer.classList.remove('active');
-        voiceControls.innerHTML = `<button class="voice-btn" style="border-color:#333;color:#333;cursor:not-allowed">[ OFFLINE ]</button>`;
+        vStatus.textContent = 'SYSTEM IDLE';
+        vStatus.classList.remove('active', 'alert');
+        vVisualizer.classList.remove('active');
+        vControls.innerHTML = `<button class="voice-btn" style="border-color:#333;color:#333;cursor:not-allowed">[ OFFLINE ]</button>`;
         return;
     }
-    voiceStatus.style.color = '';
-    voiceVisualizer.classList.remove('active'); voiceStatus.classList.remove('active', 'alert');
+
+    vStatus.style.color = '';
+    vVisualizer.classList.remove('active');
+    vStatus.classList.remove('active', 'alert');
 
     if (state === 'idle') {
-        voiceStatus.textContent = 'STANDBY';
-        voiceControls.innerHTML = `<button class="voice-btn" onclick="startVoiceCall()">[ INIT_CALL ]</button>`;
+        vStatus.textContent = 'STANDBY';
+        vControls.innerHTML = `<button class="voice-btn" onclick="startVoiceCall()">[ INIT_CALL ]</button>`;
     } else if (state === 'dialing') {
-        voiceStatus.textContent = 'DIALING...'; voiceStatus.classList.add('active');
-        voiceControls.innerHTML = `<button class="voice-btn danger" onclick="hangupVoiceCall()">[ ABORT ]</button>`;
+        vStatus.textContent = 'DIALING...'; vStatus.classList.add('active');
+        vControls.innerHTML = `<button class="voice-btn danger" onclick="hangupVoiceCall()">[ ABORT ]</button>`;
     } else if (state === 'ringing') {
-        voiceStatus.textContent = `INCOMING: ${callerName}`; voiceStatus.classList.add('alert');
-        voiceControls.innerHTML = `<button class="voice-btn" onclick="acceptVoiceCall()">[ ACCEPT ]</button><button class="voice-btn danger" onclick="hangupVoiceCall()">[ DENY ]</button>`;
+        vStatus.textContent = `INCOMING: ${callerName}`; vStatus.classList.add('alert');
+        vControls.innerHTML = `<button class="voice-btn" onclick="acceptVoiceCall()">[ ACCEPT ]</button><button class="voice-btn danger" onclick="hangupVoiceCall()">[ DENY ]</button>`;
     } else if (state === 'active') {
-        voiceStatus.textContent = 'UPLINK ACTIVE'; voiceStatus.classList.add('active'); voiceVisualizer.classList.add('active');
-        voiceControls.innerHTML = `<button class="voice-btn danger" onclick="hangupVoiceCall()">[ TERMINATE ]</button>`;
+        vStatus.textContent = 'UPLINK ACTIVE'; vStatus.classList.add('active'); vVisualizer.classList.add('active');
+        vControls.innerHTML = `<button class="voice-btn danger" onclick="hangupVoiceCall()">[ TERMINATE ]</button>`;
     }
 }
 
@@ -5875,66 +5916,102 @@ socket.on('wire_comments_update', (data) => {
 
 let currentRightTab = 'PROMO'; // 'PROMO' oder 'NEWS'
 
-// 1. HAUPTFENSTER UMSCHALTEN (CHAT / WIRE / LOGS)
+// 1. HAUPTFENSTER UMSCHALTEN (MASTER NAVIGATOR)
 window.switchMainView = (mode) => {
-    viewMode = mode; // Globale Variable aktualisieren
+    // Verhindert unnötiges Neuladen, außer wir wollen CHAT erzwingen
+    if (viewMode === mode && mode !== 'CHAT') return;
 
-    // Alle Buttons deaktivieren
-    document.querySelectorAll('.control-btn').forEach(b => b.classList.remove('active'));
+    viewMode = mode;
 
-    // --- DRAWER LOGIK (Das ist neu) ---
-    const drawer = document.getElementById('sub-nav-drawer');
-
-    if (mode === 'WIRE') {
-        // Schublade aufmachen
-        drawer.classList.add('visible');
-    } else {
-        // Schublade zumachen
-        drawer.classList.remove('visible');
-    }
-    // ----------------------------------
-
-    // Container Referenzen
+    // --- ELEMENTE REFERENZIEREN ---
     const chatOutput = document.getElementById('output');
     const wireView = document.getElementById('wire-view');
-    const inputField = document.getElementById('command-input'); // Footer Input
+    const drawer = document.getElementById('sub-nav-drawer');
+    const inputField = document.getElementById('command-input');
+    const promptSpan = document.getElementById('prompt');
+    const logsBtn = document.getElementById('btn-mode-logs'); // Referenz für Reset
 
-    // Reset Visibility
-    chatOutput.style.display = 'none';
-    wireView.style.display = 'none';
+    // --- GLOBALE RESETS ---
+    // 1. Buttons zurücksetzen
+    document.querySelectorAll('.control-btn').forEach(b => b.classList.remove('active'));
 
-    // MODE SWITCH
+    // 2. Drawer (Wire Button) verstecken
+    if (drawer) {
+        if (mode === 'WIRE') drawer.classList.add('visible');
+        else drawer.classList.remove('visible');
+    }
+
+    // --- ANSICHT LOGIK ---
+
+    // A) CHAT MODUS
     if (mode === 'CHAT') {
         document.getElementById('btn-mode-chat').classList.add('active');
+
+        // 1. Container sichtbar machen & REST VERSTECKEN
+        wireView.style.display = 'none';
         chatOutput.style.display = 'block';
 
-        // Input normalisieren
+        // 2. HARD RESET: Bildschirm sofort leeren!
+        // Das garantiert, dass die Logs visuell verschwinden.
+        chatOutput.innerHTML = '';
+
+        // 3. Input Reset (Inline, damit keine Funktion fehlt)
+        inputField.value = '';
+        inputField.disabled = false;
         inputField.placeholder = "";
-        switchChat(activeChatId); // Prompt und Header wiederherstellen
+        promptSpan.textContent = '>';
+        promptSpan.className = 'prompt-default';
+        promptSpan.style.color = '';
 
-    } else if (mode === 'WIRE') {
+        // Falls der Logs-Button rot war, normalisieren
+        if (logsBtn) logsBtn.classList.remove('danger');
+
+        // 4. Chat laden (Erzwingen!)
+        // Wir prüfen, ob activeChatId gültig ist, sonst nehmen wir LOCAL
+        if (!activeChatId || !myChats[activeChatId]) activeChatId = 'LOCAL';
+
+        switchChat(activeChatId, true);
+    }
+
+    // B) WIRE MODUS
+    else if (mode === 'WIRE') {
         document.getElementById('btn-mode-wire').classList.add('active');
-        wireView.style.display = 'flex';
 
-        // Daten laden
+        chatOutput.style.display = 'none';
+        wireView.style.display = 'flex'; // Flexbox für Wire!
+
         socket.emit('wire_load_req');
 
-        // Input für Wire anpassen
+        inputField.value = '';
         inputField.placeholder = "SEARCH FREQUENCIES (TAGS)...";
-        document.getElementById('prompt').textContent = 'WIRE/SCAN>';
-        document.getElementById('prompt').className = 'prompt-warn';
+        inputField.focus();
 
-    } else if (mode === 'BLOG') {
-        document.getElementById('btn-mode-logs').classList.add('active');
-        chatOutput.style.display = 'block'; // Blog nutzt den gleichen Output-Container
+        promptSpan.textContent = 'WIRE/SCAN>';
+        promptSpan.className = 'prompt-warn';
+    }
 
-        // Input für Blog Search
+    // C) BLOG / LOGS MODUS
+    else if (mode === 'BLOG') {
+        if(logsBtn) logsBtn.classList.add('active');
+
+        chatOutput.style.display = 'block';
+        wireView.style.display = 'none';
+
+        inputField.value = '';
         inputField.placeholder = "SEARCH ARCHIVES...";
-        document.getElementById('prompt').textContent = 'ARCHIVE/SEARCH>';
-        document.getElementById('prompt').style.color = '#ffff00';
+        inputField.focus();
 
-        renderBlogView(); // Zeigt Liste oder Detail
+        promptSpan.textContent = 'ARCHIVE/SEARCH>';
+        promptSpan.className = 'prompt-highlight';
+        promptSpan.style.color = '#ffff00';
+
+        renderBlogView();
         socket.emit('blog_list_req');
+    }
+
+    // Voice Panel nur im Chat zeigen
+    if (typeof updateVoicePanelVisibility === 'function') {
+        updateVoicePanelVisibility();
     }
 };
 
@@ -5989,23 +6066,46 @@ function renderNewsStream(posts) {
     });
 }
 
-// 3. VOICE PANEL LOGIK (Context Aware)
+// HELPER: Input auf Standard-Chat zurücksetzen
+function resetInputForChat() {
+    const inputField = document.getElementById('command-input');
+    const promptSpan = document.getElementById('prompt');
+
+    // Input leeren & aktivieren
+    inputField.value = '';
+    inputField.disabled = false;
+    inputField.placeholder = ""; // Placeholder entfernen (wird von switchChat gesetzt)
+
+    // Prompt Reset (Standard)
+    promptSpan.textContent = '>';
+    promptSpan.className = 'prompt-default';
+    promptSpan.style.color = ''; // Inline Styles (vom Blog) entfernen
+
+    // Wire/Blog spezifische Buttons resetten, falls nötig
+    document.getElementById('btn-logs').classList.remove('danger');
+    document.getElementById('btn-logs').textContent = '[ SYSTEM LOGS ]'; // Falls du den Text geändert hattest
+}
+
+// 3. VOICE PANEL LOGIK (Sicherheits-Update)
 function updateVoicePanelVisibility() {
+    // Wir holen die Elemente FRISCH aus dem DOM, um sicherzugehen
     const panel = document.getElementById('voice-module');
+    const statusEl = document.getElementById('voice-status'); // Lokale Referenz
+
+    // Wenn das Panel im HTML fehlt -> Abbruch (aber kein Absturz!)
+    if (!panel) return;
+
     const currentChat = myChats[activeChatId];
 
-    // Zeigen, wenn: Chat Modus AKTIV UND es ist ein PRIVATER Chat
-    // (Ausnahme: Wir sind im WIRE oder LOG mode -> dann Panel weg, oder bleiben lassen?)
-    // Besser: Panel bleibt sichtbar, wenn man im Private Chat "war", aber wir blenden es aus wenn viewMode != CHAT
-
+    // Logik: Zeigen bei Private Chat
     if (viewMode === 'CHAT' && currentChat && currentChat.type === 'private') {
         panel.classList.remove('voice-panel-hidden');
     } else {
         panel.classList.add('voice-panel-hidden');
-        // Falls wir gerade telefonieren, nicht auflegen, nur ausblenden?
-        // Nein, besser sichtbar lassen wenn Call aktiv ist.
-        if (voiceStatus.textContent === 'UPLINK ACTIVE') {
-            panel.classList.remove('voice-panel-hidden'); // Bleibt sichtbar während Anruf
+
+        // Sicherheits-Check: Nur auf textContent zugreifen, wenn das Element existiert!
+        if (statusEl && statusEl.textContent === 'UPLINK ACTIVE') {
+            panel.classList.remove('voice-panel-hidden');
         }
     }
 }

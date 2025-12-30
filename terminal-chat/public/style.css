@@ -46,11 +46,11 @@ header {
     align-items: center;
 
     /* WICHTIG: FESTE HÖHE ERZWINGEN */
-    height: 60px;
-    min-height: 60px;  /* Doppelte Sicherheit */
+    height: 30px;
+    min-height: 30px;  /* Doppelte Sicherheit */
     flex-shrink: 0;    /* VERBIETET das Schrumpfen, egal wie voll der Chat ist */
 
-    padding: 0 20px;
+    padding: 0 5px;
     background-color: rgba(10, 10, 10, 0.95);
     border-bottom: 1px solid #333;
     position: relative;
@@ -62,7 +62,7 @@ header {
 .logo {
     font-family: 'Courier New', monospace; /* Hacker Font */
     font-weight: bold;
-    font-size: 1.4em;
+    font-size: 1.2em;
     color: var(--accent-color);
     text-shadow: 0 0 5px rgba(0, 255, 0, 0.4); /* Leichter Glow */
     letter-spacing: 1px;
@@ -152,7 +152,7 @@ header {
     height: 100%;
     position: relative;
     overflow: hidden;
-    background-color: var(--bg-color);
+    background-color: var(--panel-bg);
     z-index: 1;
 }
 
@@ -350,69 +350,102 @@ header {
 .partner-msg { color: #ccc; }
 .dynamic-name { font-weight: bold; color: var(--accent-color); cursor: pointer; }
 
-/* --- INPUT BEREICH (FIXED LAYOUT) --- */
+/* ==========================================================================
+   MODERN GLASS INPUT AREA (Floating & Matching User-Panel)
+   ========================================================================== */
+
 .input-area {
+    /* 1. MATCHING STYLE (Identisch zum User-Panel) */
+    background: rgba(20, 20, 20, 0.6);
+
+    /* Blur Effekt */
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    backdrop-filter: blur(12px) saturate(180%);
+
+    /* Subtiler Verlauf */
+    background-image: linear-gradient(
+            135deg,
+            rgba(255, 255, 255, 0.05) 0%,
+            rgba(255, 255, 255, 0.01) 100%
+    );
+
+    /* 2. FLOATING & SHAPE (Schweben & Rundungen) */
+    /* Wir entfernen die durchgehende Border-Top und machen einen Rahmen rundherum */
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(255, 255, 255, 0.12); /* Lichtkante oben */
+    border-radius: 14px; /* Identisch zum User-Panel */
+
+    /* Das Schweben: Abstand zu den Rändern */
+    margin: 0 10px 10px 10px; /* Links/Rechts Luft, Unten Abstand zum Rand */
+
+    /* 3. TIEFE (Schatten) */
+    box-shadow:
+            0 4px 20px rgba(0, 0, 0, 0.4), /* Weicher Schatten */
+            inset 0 0 0 1px rgba(255, 255, 255, 0.02); /* Inneres Glühen */
+
+    /* 4. LAYOUT */
     display: flex;
-    align-items: flex-end;
-    background: var(--panel-bg);
-    padding: 15px 25px;
-    border-top: var(--border-thick);
-    flex-shrink: 0;
-    position: relative; /* Anker für Autocomplete */
+    align-items: flex-end; /* Wächst nach oben */
+    padding: 15px 20px;    /* Innenabstand */
     min-height: 60px;
+    flex-shrink: 0;
+    position: relative;    /* Wichtig für Autocomplete Position */
+    z-index: 50;
 }
 
-/* 1. Der Wrapper hält Prompt und Input nebeneinander */
+/* Der Wrapper für Prompt und Input */
 .input-wrapper {
     position: relative;
     flex-grow: 1;
-    display: flex;       /* WICHTIG: Flexbox für Nebeneinander */
-    align-items: flex-start; /* Oben bündig ausrichten */
+    display: flex;
+    align-items: flex-start;
     width: 100%;
+    min-width: 0;
 }
 
 #prompt {
     color: var(--accent-color);
     margin-right: 12px;
-    font-weight: bold;
+    font-weight: 700;
+    font-size: 1.1em;
     user-select: none;
-    flex-shrink: 0;      /* Prompt darf nicht gequetscht werden */
-    padding-top: 0;      /* Exakt auf Höhe der ersten Zeile */
-    line-height: 1.5;    /* Gleiche Line-Height wie Input */
+    flex-shrink: 0;
+    padding-top: 2px; /* Ausrichtung */
+    text-shadow: 0 0 8px var(--accent-dim);
 }
 
-/* 2. Der Container stapelt Textarea und Mirror übereinander */
 .input-container {
     flex-grow: 1;
-    display: grid;       /* WICHTIG: Grid zum Stapeln */
+    display: grid;
     position: relative;
+    width: 100%;
+    min-width: 0;
 }
 
 #command-input, #cmd-mirror {
     grid-area: 1 / 1;
-
     width: 100%;
-    font-family: inherit;
+
+    font-family: 'Fira Code', monospace;
     font-size: 1.1em;
-    line-height: 1.5;
+    line-height: 1.6;
+    letter-spacing: 0.5px;
+
     padding: 0;
     margin: 0;
     border: none;
     background: transparent;
 
-    white-space: pre-wrap;
-    word-wrap: break-word;
-    overflow-wrap: break-word;
-    text-indent: 0;
+    /* FIX: AGGRESSIVES UMBRECHEN */
+    white-space: pre-wrap;       /* Erhält Leerzeichen, erzwingt Umbruch am Rand */
+    overflow-wrap: break-word;   /* Bricht lange Wörter um, wenn nötig */
+    word-break: break-word;      /* Webkit-Support für besseres Umbrechen */
 
-    /* WICHTIG: Beide bekommen exakt denselben Platz-Abzug rechts */
-    /* Das reserviert Platz für die Scrollbar bei BEIDEN, damit der Text synchron bleibt */
+    /* Platz für Scrollbar reservieren, damit Text nicht springt */
     padding-right: 10px;
-
     max-height: 200px;
 }
 
-/* DAS EINGABEFELD */
 #command-input {
     z-index: 2;
     color: transparent;
@@ -421,38 +454,102 @@ header {
     resize: none;
     overflow-y: auto;
 }
-
-/* Scrollbar für Input */
 #command-input::-webkit-scrollbar { width: 4px; }
-#command-input::-webkit-scrollbar-thumb { background: var(--accent-color); border-radius: 2px; }
+#command-input::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.2); border-radius: 2px; }
 
 #cmd-mirror {
     z-index: 1;
-    color: var(--text-main);
+    color: #e0e0e0;
     pointer-events: none;
-    overflow: hidden;
-    min-height: 1.5em;
-    /* KEIN extra padding-right hier mehr, da es jetzt oben für beide definiert ist */
+    min-height: 1.6em;
 }
 
-/* Platzhalter Style */
 #command-input::placeholder {
-    opacity: 0.4;
-    font-style: italic;
-    color: var(--text-muted);
+    opacity: 0.3;
+    color: #aaa;
 }
-
-#command-input:focus::selection { background: rgba(74, 246, 38, 0.3); color: transparent; }
 
 .cursor-block {
-    display: inline; /* WICHTIG: Inline statt inline-block verhindert den Umbruch! */
+    display: inline;
     background-color: var(--accent-color);
     color: #000;
-    white-space: pre-wrap; /* Leerzeichen im Cursor behalten */
+    white-space: pre-wrap;
     animation: blink 1s step-end infinite;
+    box-decoration-break: clone;
+    -webkit-box-decoration-break: clone;
+    border-radius: 1px;
+    box-shadow: 0 0 5px var(--accent-color);
+}
 
-    /* Damit er auch bei leeren Zeilen eine Höhe hat */
-    line-height: inherit;
+/* ==========================================================================
+   MODERN AUTOCOMPLETE (Floating aligned to Input)
+   ========================================================================== */
+
+.autocomplete-items {
+    position: absolute;
+    bottom: 100%;
+    /* Da .input-area jetzt schwebt, richten wir das Popup bündig dazu aus */
+    left: 0;
+    right: 0;
+    margin-bottom: 10px; /* Kleiner Abstand zwischen Input-Bar und Popup */
+
+    /* GLASS LOOK (Identisch) */
+    background: rgba(25, 25, 25, 0.85);
+    -webkit-backdrop-filter: blur(20px);
+    backdrop-filter: blur(20px);
+
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px; /* Gleicher Radius wie Input */
+
+    box-shadow:
+            0 10px 40px rgba(0, 0, 0, 0.6),
+            inset 0 1px 0 rgba(255, 255, 255, 0.05);
+
+    z-index: 9999;
+    max-height: 350px;
+    overflow-y: auto;
+    display: none;
+
+    transform-origin: bottom center;
+    animation: popupFadeIn 0.2s cubic-bezier(0.19, 1, 0.22, 1);
+}
+
+.autocomplete-items::-webkit-scrollbar { width: 6px; }
+.autocomplete-items::-webkit-scrollbar-track { background: transparent; margin: 5px; }
+.autocomplete-items::-webkit-scrollbar-thumb { background: rgba(255,255,255,0.15); border-radius: 3px; }
+
+.autocomplete-items div {
+    padding: 12px 20px;
+    cursor: pointer;
+    background-color: transparent;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: #ccc;
+    font-family: 'Fira Code', monospace;
+    font-size: 0.95em;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    transition: all 0.15s ease;
+}
+.autocomplete-items div:last-child { border-bottom: none; }
+
+.autocomplete-items div:hover,
+.autocomplete-active {
+    background-color: rgba(255, 255, 255, 0.08) !important;
+    color: #fff !important;
+    box-shadow: inset 2px 0 0 var(--accent-color);
+    padding-left: 24px;
+}
+
+.cmd-desc {
+    color: #666; font-size: 0.8em; font-family: sans-serif;
+    background: rgba(0,0,0,0.2); padding: 2px 6px; border-radius: 4px;
+}
+.autocomplete-active .cmd-desc { color: #aaa; background: rgba(0,0,0,0.4); }
+
+@keyframes popupFadeIn {
+    from { opacity: 0; transform: translateY(10px) scale(0.98); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 /* PANELS */
@@ -610,55 +707,57 @@ header {
 .group-broadcast-footer { text-align: right; font-size: 0.8em; color: #0f0; margin-top: 5px; }
 .dynamic-name-admin { cursor: pointer; border-bottom: 1px dotted #555; }
 
-/* AUTOCOMPLETE POPUP (Clean Grey Style) */
-.autocomplete-items {
-    position: absolute;
-    bottom: 100%;
-    left: 0;
-    right: 0;
-    background-color: var(--panel-bg);
-    border-top: 1px solid #444;
-    border-bottom: none;
-    z-index: 9999;
-    max-height: 300px;
-    overflow-y: auto;
-    display: none;
-    box-shadow: 0 -10px 10px rgba(0, 0, 0, 0.05);
-}
-.autocomplete-items::-webkit-scrollbar { width: 6px; }
-.autocomplete-items::-webkit-scrollbar-track { background: var(--panel-bg); }
-.autocomplete-items::-webkit-scrollbar-thumb { background: #444; border-radius: 3px; }
-.autocomplete-items div {
-    padding: 10px 20px;
-    cursor: pointer;
-    background-color: var(--panel-bg);
-    border-bottom: 1px solid #333;
-    color: #ccc;
-    font-family: 'Courier New', monospace;
-    font-size: 0.9em;
-    display: flex;
-    justify-content: space-between;
-    transition: background-color 0.1s;
-}
-.autocomplete-items div:last-child { border-bottom: none; }
-.autocomplete-items div:hover, .autocomplete-active {
-    background-color: var(--bg-color) !important;
-    color: #fff !important;
-    border-left: 3px solid #666;
-    padding-left: 17px; /* Ausgleich padding 20 - border 3 = 17 */
-}
-.cmd-desc { color: #666; font-style: italic; font-size: 0.85em; }
-.autocomplete-active .cmd-desc { color: #999; }
-
-/* --- USER PROFILE BAR (Sidebar Footer) --- */
 .user-panel {
-    background-color: #111; /* Noch dunkler als Sidebar */
-    padding: 5px 15px;
+    /* 1. GLASS BASIS */
+    /* Wir nutzen Schwarz mit Transparenz statt #111 */
+    background: rgba(20, 20, 20, 0.6);
+
+    /* 2. DER APPLE EFFEKT (Blur) */
+    /* Das macht den Hintergrund unscharf ("Milchglas") */
+    -webkit-backdrop-filter: blur(12px);
+    backdrop-filter: blur(12px);
+
+    /* 3. SUBTILER VERLAUF (Lichtreflexion) */
+    /* Ein hauchzarter Verlauf von oben links (heller) nach unten rechts */
+    background-image: linear-gradient(
+            135deg,
+            rgba(255, 255, 255, 0.05) 0%,
+            rgba(255, 255, 255, 0.01) 100%
+    );
+
+    /* 4. RAHMEN & FORM */
+    /* Apple nutzt keine dicken Borders. Nur feine "Hairlines" */
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(255, 255, 255, 0.12); /* Oben etwas heller als Lichtkante */
+    border-radius: 14px; /* Größere Radien wirken moderner/freundlicher */
+
+    /* 5. LAYOUT & SPACING */
     display: flex;
     align-items: center;
-    border-top: var(--border-thick);
-    flex-shrink: 0; /* Darf nicht schrumpfen */
-    min-height: 60px;
+    padding: 12px 16px; /* Mehr "Breathing Room" */
+
+    /* Panel soll "schweben", nicht kleben */
+    margin: 10px;
+
+    /* 6. TIEFE (Shadow) */
+    /* Weicher Schatten für das Schwebe-Gefühl */
+    box-shadow:
+            0 4px 20px rgba(0, 0, 0, 0.4), /* Großer weicher Schatten */
+            inset 0 0 0 1px rgba(255, 255, 255, 0.02); /* Innerer Glanz */
+
+    flex-shrink: 0;
+    min-height: 60px; /* Etwas höher für bessere Proportionen */
+
+    /* Animation für Interaktion */
+    transition: all 0.3s ease;
+}
+
+/* Optional: Hover Effekt für das ganze Panel */
+.user-panel:hover {
+    background: rgba(30, 30, 30, 0.7);
+    border-color: rgba(255, 255, 255, 0.15);
+    transform: translateY(-1px); /* Minimales Anheben */
+    box-shadow: 0 8px 25px rgba(0, 0, 0, 0.5);
 }
 
 .user-avatar {
@@ -971,57 +1070,46 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
     /* max-height wird hier vom JS inline gesetzt, deshalb leer lassen */
 }
 
-/* --- SUB-NAV DRAWER (Slide Down Animation) --- */
+/* ZEILE 2: Der Drawer (Intern) */
 .sub-nav-drawer {
-    /* Layout */
+    width: 100%;
     display: flex;
     justify-content: center;
-    align-items: center;
-    background: rgba(0, 0, 0, 0.2);
-    border-bottom: 1px solid transparent; /* Erst sichtbar wenn offen */
 
-    /* Animation Start-Status (Geschlossen) */
+    /* Start: Zu */
     max-height: 0;
     opacity: 0;
-    overflow: hidden; /* Wichtig, damit Inhalt verschwindet */
+    overflow: hidden;
 
-    /* Die Magic Motion */
+    /* Animation */
     transition:
             max-height 0.4s cubic-bezier(0.25, 1, 0.5, 1),
-            opacity 0.3s ease,
-            border-color 0.3s ease;
+            opacity 0.3s ease;
 }
 
 /* Offener Zustand */
 .sub-nav-drawer.visible {
-    max-height: 60px; /* Genug Platz für den Button */
+    max-height: 50px; /* Platz für den Button */
     opacity: 1;
-    border-bottom-color: #333; /* Trennlinie erscheint */
+    margin-bottom: 10px; /* Etwas Luft nach unten im Container */
 }
 
-/* Der Button im Drawer */
+/* Der Button Style (bleibt gleich) */
 .drawer-btn {
-    width: 90%; /* Nicht ganz vollbreit, sieht edler aus */
-    padding: 8px 0;
-    margin: 10px 0; /* Abstand oben/unten im Drawer */
-
-    text-align: center;
+    width: 90%;
+    padding: 6px 0;
     background: rgba(0, 255, 0, 0.05);
     border: 1px solid var(--accent-color);
     color: var(--accent-color);
+    font-size: 0.85em;
     font-weight: bold;
-    font-size: 0.9em;
-    letter-spacing: 1px;
     cursor: pointer;
     border-radius: 4px;
-
     transition: all 0.2s;
 }
-
 .drawer-btn:hover {
     background: var(--accent-color);
     color: #000;
-    box-shadow: 0 0 10px rgba(0, 255, 0, 0.3);
 }
 
 /* Button Styling (näher dran) */
@@ -1327,20 +1415,31 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
     font-family: monospace;
 }
 
-/* 1. CONTROL DECK (Toolbar oben) - FIXED LAYOUT */
+/* 1. CONTROL DECK (Die Basis) */
 .control-deck {
     display: flex;
-    /* ÄNDERUNG: Buttons rechtsbündig oder zentriert, nicht verteilt */
+    flex-direction: column; /* WICHTIG: Untereinander anordnen */
+
+    background: rgba(0, 0, 0, 0.3);
+    border-bottom: 1px solid #333; /* Die Border ist jetzt immer am Container */
+
+    flex-shrink: 0;
+    transition: all 0.3s ease; /* Optional: Smooth Border Movement */
+}
+
+/* Neue Hilfs-Klasse: Wenn Schublade offen ist, Border weg! */
+.control-deck.merged {
+    border-bottom-color: transparent; /* Macht die Linie unsichtbar */
+}
+
+/* ZEILE 1: Die Icons */
+.deck-row {
+    display: flex;
     justify-content: center;
     align-items: center;
-
-    /* ÄNDERUNG: Fester Abstand verhindert das Springen */
     gap: 15px;
-
-    padding: 10px 5px;
-    background: rgba(0, 0, 0, 0.3);
-    border-bottom: 1px solid #333;
-    flex-shrink: 0;
+    padding: 10px 5px; /* Padding liegt jetzt hier */
+    width: 100%;
 }
 
 .control-btn {

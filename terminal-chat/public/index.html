@@ -123,16 +123,20 @@
     <div class="side-col" id="col-right">
 
         <div class="control-deck">
-            <div class="control-btn active" id="btn-mode-chat" onclick="switchMainView('CHAT')" title="Comms Uplink">💬</div>
-            <div class="control-btn" id="btn-mode-wire" onclick="switchMainView('WIRE')" title="The Wire">📡</div>
-            <div class="control-btn" id="btn-mode-logs" onclick="switchMainView('BLOG')" title="System Archives">📄</div>
-            <div class="control-btn" id="btn-mode-files" onclick="openFileSystem()" title="Secure File Transfer">📁</div>
-        </div>
 
-        <div id="sub-nav-drawer" class="sub-nav-drawer">
-            <div class="drawer-btn" onclick="openWireModal()">
-                <span>+ INITIALIZE BROADCAST</span>
+            <div class="deck-row">
+                <div class="control-btn active" id="btn-mode-chat" onclick="switchMainView('CHAT')" title="Comms Uplink">💬</div>
+                <div class="control-btn" id="btn-mode-wire" onclick="switchMainView('WIRE')" title="The Wire">📡</div>
+                <div class="control-btn" id="btn-mode-logs" onclick="switchMainView('BLOG')" title="System Archives">📄</div>
+                <div class="control-btn" id="btn-mode-files" onclick="openFileSystem()" title="Secure File Transfer">📁</div>
             </div>
+
+            <div id="sub-nav-drawer" class="sub-nav-drawer">
+                <div class="drawer-btn" onclick="openWireModal()">
+                    <span>+ INITIALIZE BROADCAST</span>
+                </div>
+            </div>
+
         </div>
 
         <div class="info-stream-wrapper">
@@ -140,7 +144,6 @@
                 <div class="stream-tab active" id="tab-promo" onclick="switchStreamTab('PROMO')">CHATS</div>
                 <div class="stream-tab" id="tab-news" onclick="switchStreamTab('NEWS')">NEWS</div>
             </div>
-
             <div class="info-stream-content" id="info-stream-container">
                 <div style="padding:10px; color:#666;">Loading data stream...</div>
             </div>
