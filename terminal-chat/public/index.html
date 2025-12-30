@@ -7,19 +7,11 @@
     <link rel="stylesheet" href="style.css">
 </head>
 <body>
-<header class="top-header">
-    <div class="logo">TERMINAL_CHAT</div>
+<header>
+    <div class="logo">TERMINAL // UPLINK</div>
 
-    <div class="header-right-side" style="display:flex; align-items:center; gap: 20px;">
-
-        <div class="system-uptime">UPTIME: <span id="session-timer">00:00:00</span></div>
-
-        <div class="header-nav">
-            <button id="btn-wire" class="voice-btn" onclick="toggleWireView()">[ THE WIRE ]</button>
-            <button id="btn-logs" class="voice-btn" onclick="toggleBlogView()">[ SYSTEM LOGS ]</button>
-            <button class="voice-btn" onclick="window.location.reload()">MAIN_SITE</button>
-            <button class="voice-btn" onclick="openFileSystem()">FILE_SYSTEM</button>
-        </div>
+    <div class="status-bar">
+        <span id="session-timer">00:00:00</span>
     </div>
 </header>
 
@@ -33,14 +25,14 @@
         <div id="chat-list"></div>
 
         <div class="user-panel">
-            <div class="user-avatar" id="current-user-avatar">
-                <span>U</span> </div>
+            <div class="user-avatar" style="background-color: #333;">?</div>
+
             <div class="user-info">
-                <div class="user-name" id="current-user-name">LOADING...</div>
-                <div class="user-id" id="current-user-id">#Initializing</div>
+                <div class="user-name" id="sidebar-user-name">Loading...</div>
+                <div class="user-id" id="sidebar-user-id">Initializing...</div>
             </div>
-            <div class="user-settings-btn" onclick="openSettings()" title="User Settings">
-                ⚙️ </div>
+
+            <div class="user-settings-btn" onclick="openSettings()">⚙</div>
         </div>
 
     </div>
@@ -55,13 +47,6 @@
         <div id="output"></div>
 
         <div id="wire-view" style="display: none; flex: 1; flex-direction: column; overflow: hidden; width: 100%; height: 100%;">
-
-            <div class="wire-controls" style="padding: 15px; border-bottom: var(--border-thick); display: flex; justify-content: flex-end; align-items: center; background: var(--panel-bg);">
-
-                <button class="voice-btn" style="border-color: var(--accent-color); color: var(--accent-color);" onclick="openWireModal()">
-                    [ + BROADCAST ]
-                </button>
-            </div>
 
             <div id="wire-feed-list" class="wire-feed-container">
             </div>
@@ -137,31 +122,46 @@
 
     <div class="side-col" id="col-right">
 
-        <div class="panel-window" id="panel-top" style="flex: 1; min-height: 100px;">
-            <div class="panel-header">[Public_Promoted_Chats]</div>
-            <div id="promo-list" class="panel-content">
-                <div class="system-msg">Scanning frequencies...</div>
+        <div class="control-deck">
+            <div class="control-btn active" id="btn-mode-chat" onclick="switchMainView('CHAT')" title="Comms Uplink">💬</div>
+            <div class="control-btn" id="btn-mode-wire" onclick="switchMainView('WIRE')" title="The Wire">📡</div>
+            <div class="control-btn" id="btn-mode-logs" onclick="switchMainView('BLOG')" title="System Archives">📄</div>
+            <div class="control-btn" id="btn-mode-files" onclick="openFileSystem()" title="Secure File Transfer">📁</div>
+        </div>
+
+        <div id="sub-nav-drawer" class="sub-nav-drawer">
+            <div class="drawer-btn" onclick="openWireModal()">
+                <span>+ INITIALIZE BROADCAST</span>
             </div>
         </div>
 
-        <div class="resizer-horizontal" id="drag-horizontal"></div>
+        <div class="info-stream-wrapper">
+            <div class="stream-tabs">
+                <div class="stream-tab active" id="tab-promo" onclick="switchStreamTab('PROMO')">CHATS</div>
+                <div class="stream-tab" id="tab-news" onclick="switchStreamTab('NEWS')">NEWS</div>
+            </div>
 
-        <div id="info-window" class="panel-window" id="panel-bottom" style="height: 300px;">
-            <div class="panel-header">/// AUDIO_UPLINK ///</div>
-            <div id="voice-panel">
-                <div id="voice-status" class="system-msg">SYSTEM IDLE</div>
-                <div class="voice-visualizer">
-                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
-                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
-                    <div class="bar"></div><div class="bar"></div><div class="bar"></div>
-                    <div class="bar"></div>
-                </div>
-                <div id="voice-controls">
-                    <button class="voice-btn" style="border-color:#333; color:#333; cursor:not-allowed;">[ OFFLINE ]</button>
-                </div>
-                <audio id="remote-audio" autoplay></audio>
+            <div class="info-stream-content" id="info-stream-container">
+                <div style="padding:10px; color:#666;">Loading data stream...</div>
             </div>
         </div>
+
+        <div id="voice-module" class="voice-panel-hidden">
+            <div class="voice-header">
+                <span class="voice-status-led">●</span> AUDIO UPLINK
+            </div>
+            <div class="voice-visualizer">
+                <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+                <div class="bar"></div><div class="bar"></div><div class="bar"></div>
+            </div>
+            <div id="voice-status">STANDBY</div>
+            <div id="voice-controls">
+            </div>
+            <audio id="remote-audio" autoplay></audio>
+        </div>
+
     </div>
 
 </div>

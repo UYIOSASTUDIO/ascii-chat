@@ -441,7 +441,7 @@ function switchChat(id) {
             appState = 'CHATTING';
         }
 
-        updateVoiceUI('idle');
+        updateVoicePanelVisibility();
     }
 
     // 5. Rendering
@@ -3008,9 +3008,12 @@ socket.on('private_leave_received', (data) => {
 
 // 9. PROMO / INFO BOARD (Das hier aktualisiert die Liste rechts oben)
 socket.on('promo_update', (list) => {
-    const el = document.getElementById('promo-list');
+
+    if (currentRightTab !== 'PROMO') return;
+
+    const el = document.getElementById('info-stream-container'); // ID GEÄNDERT!
     if(!el) return;
-    el.innerHTML = ''; // Leeren
+    el.innerHTML = '';
 
     if (list.length === 0) {
         el.innerHTML = '<div class="system-msg">No active signals found ...</div>';
@@ -3895,7 +3898,12 @@ function toggleBlogView() {
 // Server schickt Liste
 socket.on('blog_list_res', (list) => {
     blogCache = list;
+
+    // Hauptfenster Update
     if (viewMode === 'BLOG') renderBlogView();
+
+    // Rechter Stream Update
+    if (currentRightTab === 'NEWS') renderNewsStream(list);
 });
 
 // Update Signal
@@ -5051,22 +5059,24 @@ setInterval(() => {
     if (timerEl) timerEl.textContent = timeStr;
 }, 1000);
 
-// 2. GUI UPDATE (Sidebar Footer aktualisieren)
+// 2. GUI UPDATE (Nur noch Sidebar Footer)
 function updateUserUI() {
     if (!myKey) return; // Noch nicht eingeloggt
 
-    // Avatar Initiale
     const initial = (myUsername || 'U').charAt(0).toUpperCase();
-    document.getElementById('current-user-avatar').innerHTML = `<span>${initial}</span>`;
 
-    // Name
-    document.getElementById('current-user-name').textContent = myUsername;
+    // --- SIDEBAR UPDATE (Header Teil wurde gelöscht) ---
+    const sidebarName = document.getElementById('sidebar-user-name');
+    const sidebarId = document.getElementById('sidebar-user-id');
+    const sidebarAvatar = document.querySelector('.user-panel .user-avatar');
 
-    // ID (Formatieren für Lesbarkeit)
-    document.getElementById('current-user-id').textContent = `#${myKey}`;
-
-    // Role (Optional, Farbe ändern)
-    // Kann erweitert werden wenn wir window.myRole speichern
+    if (sidebarName) sidebarName.textContent = myUsername;
+    if (sidebarId) sidebarId.textContent = `#${myKey}`;
+    if (sidebarAvatar) {
+        sidebarAvatar.textContent = initial;
+        sidebarAvatar.style.backgroundColor = 'var(--accent-color)';
+        sidebarAvatar.style.color = '#000';
+    }
 }
 
 // 3. MODAL ÖFFNEN
@@ -5511,23 +5521,56 @@ function renderWireFeed(posts) {
     });
 }
 
-// HELPER: Post ausklappen und wieder einklappen
+// HELPER: Post ausklappen (Smart Animation mit Delay)
 window.toggleWireExpansion = (id) => {
     const body = document.getElementById(`body-${id}`);
     const btn = document.getElementById(`more-${id}`);
 
-    // Prüfen: Ist er schon offen?
     const isExpanded = body.classList.contains('expanded');
+    const collapsedMaxHeight = "4.5em"; // Zielhöhe beim Einklappen
+
+    // Sicherheits-Check: Laufende Timer löschen, falls User schnell klickt
+    if (body.expansionTimer) {
+        clearTimeout(body.expansionTimer);
+    }
 
     if (isExpanded) {
-        // EINKLAPPEN
-        body.classList.remove('expanded');
+        // --- EINKLAPPEN (Show Less) ---
+
+        // 1. Startpunkt setzen (aktuelle Pixelhöhe)
+        // WICHTIG: Das muss passieren, während 'display: block' noch aktiv ist!
+        body.style.maxHeight = body.scrollHeight + 'px';
+
+        // 2. Reflow erzwingen
+        void body.offsetHeight;
+
+        // 3. Animation starten (Zielhöhe setzen)
+        body.style.maxHeight = collapsedMaxHeight;
+
+        // 4. Button sofort ändern
         btn.innerHTML = 'show more ⋁';
-        // Optional: Nach oben scrollen, falls der Post sehr lang war?
-        // body.scrollIntoView({ behavior: 'smooth', block: 'center' });
+
+        // 5. WARTEN bis Animation fertig ist, DANN erst Klasse entfernen
+        // Deine CSS Transition ist 0.5s -> also warten wir 500ms
+        body.expansionTimer = setTimeout(() => {
+            body.classList.remove('expanded');
+            // Jetzt springt es auf display: -webkit-box um (für die '...' Punkte)
+            // Da die Höhe aber schon 4.5em ist, sieht man keinen Sprung mehr.
+        }, 500);
+
     } else {
-        // AUSKLAPPEN
+        // --- AUSKLAPPEN (Show More) ---
+
+        // 1. Sofort Klasse hinzufügen (damit display: block aktiv wird)
         body.classList.add('expanded');
+
+        // 2. Zielhöhe berechnen
+        const fullHeight = body.scrollHeight + 'px';
+
+        // 3. Animation starten
+        body.style.maxHeight = fullHeight;
+
+        // 4. Button ändern
         btn.innerHTML = 'show less ⋀';
     }
 };
@@ -5825,6 +5868,147 @@ socket.on('wire_comments_update', (data) => {
         socket.emit('wire_get_comments_req', data.postId);
     }
 });
+
+// =============================================================================
+// UI CONTROLLER (CONTROL DECK & LAYOUT)
+// =============================================================================
+
+let currentRightTab = 'PROMO'; // 'PROMO' oder 'NEWS'
+
+// 1. HAUPTFENSTER UMSCHALTEN (CHAT / WIRE / LOGS)
+window.switchMainView = (mode) => {
+    viewMode = mode; // Globale Variable aktualisieren
+
+    // Alle Buttons deaktivieren
+    document.querySelectorAll('.control-btn').forEach(b => b.classList.remove('active'));
+
+    // --- DRAWER LOGIK (Das ist neu) ---
+    const drawer = document.getElementById('sub-nav-drawer');
+
+    if (mode === 'WIRE') {
+        // Schublade aufmachen
+        drawer.classList.add('visible');
+    } else {
+        // Schublade zumachen
+        drawer.classList.remove('visible');
+    }
+    // ----------------------------------
+
+    // Container Referenzen
+    const chatOutput = document.getElementById('output');
+    const wireView = document.getElementById('wire-view');
+    const inputField = document.getElementById('command-input'); // Footer Input
+
+    // Reset Visibility
+    chatOutput.style.display = 'none';
+    wireView.style.display = 'none';
+
+    // MODE SWITCH
+    if (mode === 'CHAT') {
+        document.getElementById('btn-mode-chat').classList.add('active');
+        chatOutput.style.display = 'block';
+
+        // Input normalisieren
+        inputField.placeholder = "";
+        switchChat(activeChatId); // Prompt und Header wiederherstellen
+
+    } else if (mode === 'WIRE') {
+        document.getElementById('btn-mode-wire').classList.add('active');
+        wireView.style.display = 'flex';
+
+        // Daten laden
+        socket.emit('wire_load_req');
+
+        // Input für Wire anpassen
+        inputField.placeholder = "SEARCH FREQUENCIES (TAGS)...";
+        document.getElementById('prompt').textContent = 'WIRE/SCAN>';
+        document.getElementById('prompt').className = 'prompt-warn';
+
+    } else if (mode === 'BLOG') {
+        document.getElementById('btn-mode-logs').classList.add('active');
+        chatOutput.style.display = 'block'; // Blog nutzt den gleichen Output-Container
+
+        // Input für Blog Search
+        inputField.placeholder = "SEARCH ARCHIVES...";
+        document.getElementById('prompt').textContent = 'ARCHIVE/SEARCH>';
+        document.getElementById('prompt').style.color = '#ffff00';
+
+        renderBlogView(); // Zeigt Liste oder Detail
+        socket.emit('blog_list_req');
+    }
+};
+
+// 2. RECHTE SPALTE TABS (PROMO / NEWS)
+window.switchStreamTab = (tab) => {
+    currentRightTab = tab;
+
+    // Tabs stylen
+    document.getElementById('tab-promo').classList.toggle('active', tab === 'PROMO');
+    document.getElementById('tab-news').classList.toggle('active', tab === 'NEWS');
+
+    const container = document.getElementById('info-stream-container');
+    container.innerHTML = ''; // Leeren
+
+    if (tab === 'PROMO') {
+        // Promo Liste generieren (Nutzt Daten aus globalem Cache oder fragt an)
+        socket.emit('request_promo_list');
+        // socket.on('promo_update') füllt das dann
+    } else if (tab === 'NEWS') {
+        // News laden (Wir nutzen den Blog Cache oder fragen kurz an)
+        if (blogCache.length > 0) {
+            renderNewsStream(blogCache);
+        } else {
+            socket.emit('blog_list_req'); // Daten holen
+        }
+    }
+};
+
+// Helper: News im rechten Stream anzeigen
+function renderNewsStream(posts) {
+    const container = document.getElementById('info-stream-container');
+    // Falls wir gerade nicht im News-Tab sind -> Abbruch
+    if (currentRightTab !== 'NEWS') return;
+
+    container.innerHTML = '';
+
+    // Nur die neuesten 10
+    posts.slice(0, 10).forEach(p => {
+        const item = document.createElement('div');
+        item.className = 'stream-news-item';
+        const date = new Date(p.timestamp).toLocaleDateString();
+        item.innerHTML = `
+            <span class="stream-news-date">${date}</span>
+            <span class="stream-news-title">${p.title}</span>
+        `;
+        item.onclick = () => {
+            // Beim Klick: Hauptfenster auf Logs umschalten und Post öffnen
+            switchMainView('BLOG');
+            window.openBlogPost(p.id);
+        };
+        container.appendChild(item);
+    });
+}
+
+// 3. VOICE PANEL LOGIK (Context Aware)
+function updateVoicePanelVisibility() {
+    const panel = document.getElementById('voice-module');
+    const currentChat = myChats[activeChatId];
+
+    // Zeigen, wenn: Chat Modus AKTIV UND es ist ein PRIVATER Chat
+    // (Ausnahme: Wir sind im WIRE oder LOG mode -> dann Panel weg, oder bleiben lassen?)
+    // Besser: Panel bleibt sichtbar, wenn man im Private Chat "war", aber wir blenden es aus wenn viewMode != CHAT
+
+    if (viewMode === 'CHAT' && currentChat && currentChat.type === 'private') {
+        panel.classList.remove('voice-panel-hidden');
+    } else {
+        panel.classList.add('voice-panel-hidden');
+        // Falls wir gerade telefonieren, nicht auflegen, nur ausblenden?
+        // Nein, besser sichtbar lassen wenn Call aktiv ist.
+        if (voiceStatus.textContent === 'UPLINK ACTIVE') {
+            panel.classList.remove('voice-panel-hidden'); // Bleibt sichtbar während Anruf
+        }
+    }
+}
 
 // --- INIT ---
 runBootSequence();
