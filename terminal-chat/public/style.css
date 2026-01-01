@@ -1446,7 +1446,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 /* ZEILE 1: Die Icons */
 .deck-row {
     display: flex;
-    justify-content: center;
+    justify-content: space-around;
     align-items: center;
     gap: 15px;
     padding: 10px 5px; /* Padding liegt jetzt hier */
@@ -1651,4 +1651,95 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
 @media (max-width: 700px) {
     .cmd-row { flex-direction: column; }
     .manual-section .cmd { margin-bottom: 4px; }
+}
+
+/* --- MODERN GLASS MESSAGE CARDS (Rendezvous) --- */
+.glass-card {
+    /* 1. Basis & Glass Effekt (Identisch zu Input/User-Panel) */
+    background: rgba(20, 20, 20, 0.6);
+    -webkit-backdrop-filter: blur(12px) saturate(180%);
+    backdrop-filter: blur(12px) saturate(180%);
+
+    /* 2. Rahmen & Form */
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-top: 1px solid rgba(255, 255, 255, 0.12);
+    border-radius: 12px;
+
+    /* 3. Größe & Position */
+    width: fit-content;      /* Nur so breit wie nötig! */
+    max-width: 85%;          /* Aber nicht breiter als der Chat */
+    margin: 15px 0;          /* Abstand oben/unten */
+    padding: 15px 20px;
+
+    /* 4. Tiefe */
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+}
+
+.glass-card-header {
+    font-size: 0.75em;
+    color: var(--text-muted);
+    text-transform: uppercase;
+    letter-spacing: 1px;
+    margin-bottom: 8px;
+    border-bottom: 1px solid rgba(255,255,255,0.05);
+    padding-bottom: 5px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.glass-card-body {
+    color: var(--text-main);
+    font-size: 0.95em;
+    line-height: 1.4;
+}
+
+.glass-key-display {
+    font-family: 'Fira Code', monospace;
+    font-size: 1.2em;
+    color: var(--accent-color);
+    background: rgba(0,0,0,0.3);
+    padding: 8px 12px;
+    border-radius: 6px;
+    margin: 10px 0;
+    cursor: pointer;
+    transition: all 0.2s;
+    text-align: center;
+    border: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+.glass-key-display:hover {
+    background: rgba(74, 246, 38, 0.1);
+    border-color: var(--accent-color);
+}
+
+.glass-card-actions {
+    margin-top: 12px;
+    display: flex;
+    gap: 10px;
+    justify-content: flex-end;
+}
+
+/* Kleine Anpassung für die Buttons darin */
+.glass-card-actions .voice-btn {
+    font-size: 0.8em;
+    padding: 4px 10px;
+    margin: 0;
+}
+
+/* --- SCANNING ANIMATION --- */
+@keyframes radar-pulse {
+    0% { box-shadow: 0 0 0 0 rgba(0, 255, 255, 0.4); }
+    70% { box-shadow: 0 0 0 10px rgba(0, 255, 255, 0); }
+    100% { box-shadow: 0 0 0 0 rgba(0, 255, 255, 0); }
+}
+
+.glass-card.scanning {
+    border-color: #00ffff; /* Cyan für Aktivität */
+    animation: radar-pulse 2s infinite;
+}
+
+.glass-card.scanning .glass-card-header {
+    color: #00ffff;
+    border-bottom-color: rgba(0, 255, 255, 0.2);
 }

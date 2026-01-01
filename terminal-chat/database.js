@@ -3,54 +3,55 @@ const sqlite3 = require('sqlite3').verbose();
 const { open } = require('sqlite');
 const bcrypt = require('bcrypt');
 const path = require('path');
-const crypto = require('crypto'); // WICHTIG: Für Key-Generierung
+const crypto = require('crypto');
 
-const DB_PATH = path.join(__dirname, 'secure_storage.sqlite');
-
-let db;
+// --- WICHTIG: EINE ZENTRALE VERBINDUNG ---
+// Wir definieren das Promise global, damit ALLE Funktionen (auch addVip) darauf zugreifen können.
+const dbPromise = open({
+    filename: path.join(__dirname, 'secure_storage', 'chat.db'),
+    driver: sqlite3.Database
+});
 
 // --- 1. DATENBANK INIT ---
 async function initDB() {
-    db = await open({
-        filename: DB_PATH,
-        driver: sqlite3.Database
-    });
+    // Wir warten auf die oben definierte Verbindung
+    const db = await dbPromise;
 
     console.log('[DB] Connected to SQLite Storage.');
 
-    // Institutionen Tabelle (JETZT MIT KEYS!)
+    // Institutionen Tabelle
     await db.exec(`
         CREATE TABLE IF NOT EXISTS institutions (
-                                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                    tag TEXT UNIQUE NOT NULL,
-                                                    name TEXT NOT NULL,
-                                                    email TEXT UNIQUE,
-                                                    description TEXT,   -- NEU: Die Beschreibung
-                                                    password_hash TEXT NOT NULL,
-                                                    two_factor_secret TEXT,
-                                                    color TEXT DEFAULT '#00ff00',
-                                                    inbox_file TEXT,
-                                                    public_key TEXT,
-                                                    private_key TEXT,
-                                                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            tag TEXT UNIQUE NOT NULL,
+            name TEXT NOT NULL,
+            email TEXT UNIQUE,
+            description TEXT,
+            password_hash TEXT NOT NULL,
+            two_factor_secret TEXT,
+            color TEXT DEFAULT '#00ff00',
+            inbox_file TEXT,
+            public_key TEXT,
+            private_key TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     `);
 
-    // Tabelle für Bewerbungen (Requests)
+    // Tabelle für Bewerbungen
     await db.exec(`
         CREATE TABLE IF NOT EXISTS registration_requests (
-                                                             id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                             org_name TEXT NOT NULL,
-                                                             org_tag TEXT NOT NULL,           -- NEU: Die gewünschte ID (z.B. CIA)
-                                                             message TEXT,                    -- NEU: Die Bewerbungsnachricht
-                                                             email TEXT NOT NULL UNIQUE,
-                                                             status TEXT DEFAULT 'UNVERIFIED',
-                                                             verification_code TEXT,
-                                                             request_date DATETIME DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            org_name TEXT NOT NULL,
+            org_tag TEXT NOT NULL,
+            message TEXT,
+            email TEXT NOT NULL UNIQUE,
+            status TEXT DEFAULT 'UNVERIFIED',
+            verification_code TEXT,
+            request_date DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     `);
 
-    // Tabelle für Einladungen (Tokens)
+    // Tabelle für Einladungen
     await db.exec(`
         CREATE TABLE IF NOT EXISTS invite_tokens (
             token TEXT PRIMARY KEY,
@@ -60,41 +61,44 @@ async function initDB() {
         );
     `);
 
+    // Blog
     await db.exec(`
         CREATE TABLE IF NOT EXISTS system_blogs (
-                                                    id INTEGER PRIMARY KEY AUTOINCREMENT,
-                                                    title TEXT,
-                                                    content TEXT NOT NULL,
-                                                    author_tag TEXT NOT NULL,
-                                                    author_name TEXT NOT NULL,
-                                                    tags TEXT,
-                                                    attachment_data TEXT,
-                                                    is_important INTEGER DEFAULT 0,
-                                                    password TEXT,                  -- <--- NEU: HIER SPEICHERN WIR DAS PASSWORT
-                                                    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            title TEXT,
+            content TEXT NOT NULL,
+            author_tag TEXT NOT NULL,
+            author_name TEXT NOT NULL,
+            tags TEXT,
+            attachment_data TEXT,
+            is_important INTEGER DEFAULT 0,
+            password TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
         );
     `);
 
+    // The Wire Posts
     await db.exec(`
         CREATE TABLE IF NOT EXISTS wire_posts (
-                                                  id TEXT PRIMARY KEY,
-                                                  author_name TEXT,
-                                                  author_key TEXT,
-                                                  content TEXT,
-                                                  tags TEXT,
-                                                  created_at INTEGER,
-                                                  expires_at INTEGER,
-                                                  max_expires_at INTEGER,
-                                                  fuelers TEXT,
-                                                  discussion_id TEXT,
-                                                  attachment TEXT          -- <--- NEU: JSON String für Datei-Infos
+            id TEXT PRIMARY KEY,
+            author_name TEXT,
+            author_key TEXT,
+            content TEXT,
+            tags TEXT,
+            created_at INTEGER,
+            expires_at INTEGER,
+            max_expires_at INTEGER,
+            fuelers TEXT,
+            discussion_id TEXT,
+            attachment TEXT
         )
     `);
 
+    // The Wire Comments
     await db.exec(`
         CREATE TABLE IF NOT EXISTS wire_comments (
             id TEXT PRIMARY KEY,
-            post_id TEXT,           -- Verknüpfung zum Wire Post
+            post_id TEXT,
             author_name TEXT,
             author_key TEXT,
             content TEXT,
@@ -102,19 +106,27 @@ async function initDB() {
         )
     `);
 
+    // VIP TABLE (Das neue Feature!)
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS vips (
+            handle TEXT PRIMARY KEY,
+            display_name TEXT,
+            public_key TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+        );
+    `);
+
     console.log('[DB] Schema synchronized (Keys enabled).');
 }
 
 // --- 2. CORE FUNCTIONS ---
 
-// Neue Institution erstellen (Inklusive Key-Generierung!)
 async function createInstitution(tag, name, plainPassword, twoFactorSecret, color) {
+    const db = await dbPromise; // Zugriff auf globale Verbindung
     const saltRounds = 10;
     const hash = await bcrypt.hash(plainPassword, saltRounds);
     const inboxFile = `inbox_${tag.toLowerCase()}.json`;
 
-    // A) RSA SCHLÜSSEL PAAR GENERIEREN
-    // Wir machen das hier synchron, da es nur einmal beim Setup passiert.
     const { publicKey, privateKey } = crypto.generateKeyPairSync('rsa', {
         modulusLength: 2048,
         publicKeyEncoding: { type: 'spki', format: 'pem' },
@@ -122,13 +134,12 @@ async function createInstitution(tag, name, plainPassword, twoFactorSecret, colo
     });
 
     try {
-        // B) ALLES SPEICHERN
         await db.run(`
             INSERT INTO institutions (tag, name, password_hash, two_factor_secret, color, inbox_file, public_key, private_key)
             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
         `, [tag, name, hash, twoFactorSecret, color, inboxFile, publicKey, privateKey]);
 
-        console.log(`[DB] Institution [${tag}] created with 2048-bit RSA keys.`);
+        console.log(`[DB] Institution [${tag}] created.`);
         return true;
     } catch (e) {
         console.error(`[DB] Error creating ${tag}:`, e.message);
@@ -137,6 +148,7 @@ async function createInstitution(tag, name, plainPassword, twoFactorSecret, colo
 }
 
 async function getInstitutionByTag(tag) {
+    const db = await dbPromise;
     return await db.get('SELECT * FROM institutions WHERE tag = ?', [tag]);
 }
 
@@ -144,11 +156,10 @@ async function verifyPassword(inputPassword, storedHash) {
     return await bcrypt.compare(inputPassword, storedHash);
 }
 
-// 1. Request erstellen (Erweitert)
 async function createRequest(orgName, orgTag, message, email, verifyCode) {
+    const db = await dbPromise;
     try {
         await db.run("DELETE FROM registration_requests WHERE email = ?", [email]);
-
         await db.run(`
             INSERT INTO registration_requests (org_name, org_tag, message, email, verification_code)
             VALUES (?, ?, ?, ?, ?)
@@ -161,35 +172,34 @@ async function createRequest(orgName, orgTag, message, email, verifyCode) {
 }
 
 async function verifyRequestEmail(email, code) {
+    const db = await dbPromise;
     const req = await db.get("SELECT * FROM registration_requests WHERE email = ?", [email]);
 
     if (!req) return { success: false, msg: "Email not found." };
     if (req.status !== 'UNVERIFIED') return { success: false, msg: "Already verified." };
     if (req.verification_code !== code) return { success: false, msg: "Wrong code." };
 
-    // Code stimmt -> Status auf PENDING (Sichtbar für Admin)
     await db.run("UPDATE registration_requests SET status = 'PENDING' WHERE email = ?", [email]);
     return { success: true };
 }
 
 async function getPendingRequests() {
+    const db = await dbPromise;
     return await db.all("SELECT * FROM registration_requests WHERE status = 'PENDING'");
 }
 
-// --- NEU: ADMIN FUNKTIONEN ---
-
-// Holt eine einzelne Anfrage per ID
 async function getRequestById(id) {
+    const db = await dbPromise;
     return await db.get("SELECT * FROM registration_requests WHERE id = ?", [id]);
 }
 
-// Status update (z.B. auf APPROVED)
 async function updateRequestStatus(id, status) {
+    const db = await dbPromise;
     await db.run("UPDATE registration_requests SET status = ? WHERE id = ?", [status, id]);
 }
 
-// Token erstellen
 async function createInviteToken(token, approvedEmail, orgNameSuggestion) {
+    const db = await dbPromise;
     try {
         await db.run(`
             INSERT INTO invite_tokens (token, approved_email, org_name_suggestion)
@@ -199,26 +209,23 @@ async function createInviteToken(token, approvedEmail, orgNameSuggestion) {
     } catch(e) { return false; }
 }
 
-// Token prüfen (für später beim /setup)
 async function getInviteToken(token) {
+    const db = await dbPromise;
     return await db.get("SELECT * FROM invite_tokens WHERE token = ? AND is_used = 0", [token]);
 }
 
-// Token als benutzt markieren
 async function markTokenUsed(token) {
+    const db = await dbPromise;
     await db.run("UPDATE invite_tokens SET is_used = 1 WHERE token = ?", [token]);
 }
 
-// --- NEU: INSTITUTION LISTING & EDITING ---
-
-// 1. Öffentliche Liste abrufen (OHNE Passwörter/Keys!)
-// Liste aller Institutionen holen (ID, Name, Description, Color)
 async function getPublicInstitutionList() {
+    const db = await dbPromise;
     return await db.all("SELECT tag, name, description, color FROM institutions ORDER BY tag ASC");
 }
 
-// 2. Beschreibung updaten
 async function updateInstitutionDescription(tag, newDescription) {
+    const db = await dbPromise;
     try {
         await db.run("UPDATE institutions SET description = ? WHERE tag = ?", [newDescription, tag]);
         return true;
@@ -227,10 +234,10 @@ async function updateInstitutionDescription(tag, newDescription) {
     }
 }
 
-// --- BLOG / SYSTEM LOGS ---
+// --- BLOG ---
 
-// 1. Erstellen (Jetzt mit Passwort)
 async function createBlogPost(data) {
+    const db = await dbPromise;
     await db.run(`
         INSERT INTO system_blogs (title, content, author_tag, author_name, tags, attachment_data, is_important, password)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?)
@@ -242,12 +249,12 @@ async function createBlogPost(data) {
         JSON.stringify(data.tags || []),
         JSON.stringify(data.attachment || null),
         data.important ? 1 : 0,
-        data.password || null // <--- Passwort speichern
+        data.password || null
     ]);
 }
 
-// 2. Abrufen (Passwort mitladen)
 async function getBlogPosts() {
+    const db = await dbPromise;
     const rows = await db.all("SELECT * FROM system_blogs ORDER BY id DESC LIMIT 50");
     return rows.map(row => ({
         id: row.id,
@@ -258,13 +265,13 @@ async function getBlogPosts() {
         tags: JSON.parse(row.tags || '[]'),
         attachment: JSON.parse(row.attachment_data || 'null'),
         important: row.is_important === 1,
-        password: row.password, // <--- WICHTIG für den Server-Check
+        password: row.password,
         timestamp: row.created_at
     }));
 }
 
-// 3. Einzeln holen
 async function getBlogPostById(id) {
+    const db = await dbPromise;
     const row = await db.get("SELECT * FROM system_blogs WHERE id = ?", [id]);
     if (!row) return null;
     return {
@@ -276,13 +283,13 @@ async function getBlogPostById(id) {
         tags: JSON.parse(row.tags || '[]'),
         attachment: JSON.parse(row.attachment_data || 'null'),
         important: row.is_important === 1,
-        password: row.password, // <--- Auch hier
+        password: row.password,
         timestamp: row.created_at
     };
 }
 
-// 5. Update (Passwort auch updaten)
 async function updateBlogPost(id, data) {
+    const db = await dbPromise;
     await db.run(`
         UPDATE system_blogs 
         SET title = ?, content = ?, tags = ?, attachment_data = ?, is_important = ?, password = ?
@@ -293,22 +300,20 @@ async function updateBlogPost(id, data) {
         JSON.stringify(data.tags || []),
         JSON.stringify(data.attachment || null),
         data.important ? 1 : 0,
-        data.password || null, // <--- Update
+        data.password || null,
         id
     ]);
 }
 
-// 4. Löschen
 async function deleteBlogPost(id) {
+    const db = await dbPromise;
     await db.run("DELETE FROM system_blogs WHERE id = ?", [id]);
 }
 
-// =============================================================================
-// THE WIRE FUNCTIONS
-// =============================================================================
+// --- WIRE ---
 
-// 1. Post erstellen
 async function createWirePost(post) {
+    const db = await dbPromise;
     await db.run(`
         INSERT INTO wire_posts (
             id, author_name, author_key, content, tags,
@@ -325,38 +330,30 @@ async function createWirePost(post) {
         post.maxExpiresAt,
         JSON.stringify([]),
         null,
-        post.attachment ? JSON.stringify(post.attachment) : null // <--- NEU
+        post.attachment ? JSON.stringify(post.attachment) : null
     ]);
 }
 
-// 2. Aktive Posts laden (MIT KORREKTEM MAPPING)
 async function getActiveWirePosts() {
+    const db = await dbPromise;
     const now = Date.now();
 
-    // 1. Aufräumen
     await db.run('DELETE FROM wire_posts WHERE expires_at < ?', [now]);
 
-    // 2. Laden
     const rows = await db.all('SELECT * FROM wire_posts ORDER BY created_at DESC');
-
     const enrichedRows = [];
 
     for (const row of rows) {
         const count = await getCommentCount(row.id);
-
         enrichedRows.push({
             id: row.id,
             authorName: row.author_name,
             authorKey: row.author_key,
             content: row.content,
             tags: JSON.parse(row.tags || '[]'),
-
-            // --- HIER WAREN DIE NAMENS-FEHLER ---
-            createdAt: row.created_at,        // WICHTIG: createdAt (nicht created_at)
-            expiresAt: row.expires_at,        // WICHTIG: expiresAt (nicht expires_at)
-            maxExpiresAt: row.max_expires_at, // WICHTIG: maxExpiresAt
-            // ------------------------------------
-
+            createdAt: row.created_at,
+            expiresAt: row.expires_at,
+            maxExpiresAt: row.max_expires_at,
             fuelers: JSON.parse(row.fuelers || '[]'),
             discussionId: row.discussion_id,
             commentCount: count,
@@ -366,8 +363,8 @@ async function getActiveWirePosts() {
     return enrichedRows;
 }
 
-// 3. Post Updaten (Fuel & Discussion Link)
 async function updateWirePost(post) {
+    const db = await dbPromise;
     await db.run(`
         UPDATE wire_posts SET 
             expires_at = ?,
@@ -382,11 +379,8 @@ async function updateWirePost(post) {
     ]);
 }
 
-// =============================================================================
-// WIRE COMMENT FUNCTIONS
-// =============================================================================
-
 async function addWireComment(data) {
+    const db = await dbPromise;
     await db.run(`
         INSERT INTO wire_comments (id, post_id, author_name, author_key, content, timestamp)
         VALUES (?, ?, ?, ?, ?, ?)
@@ -394,24 +388,50 @@ async function addWireComment(data) {
 }
 
 async function getWireComments(postId) {
+    const db = await dbPromise;
     return await db.all('SELECT * FROM wire_comments WHERE post_id = ? ORDER BY timestamp ASC', [postId]);
 }
 
-// Hilfsfunktion: Zählt Kommentare für einen Post
 async function getCommentCount(postId) {
+    const db = await dbPromise;
     const result = await db.get('SELECT COUNT(*) as count FROM wire_comments WHERE post_id = ?', [postId]);
     return result ? result.count : 0;
 }
 
-// Cleanup: Löscht Kommentare, deren Post nicht mehr existiert
 async function cleanupOrphanedComments() {
+    const db = await dbPromise;
     await db.run(`
         DELETE FROM wire_comments 
         WHERE post_id NOT IN (SELECT id FROM wire_posts)
     `);
 }
 
-// VERGISS NICHT, DIE NEUEN FUNKTIONEN HIER HINZUZUFÜGEN:
+// --- VIP SYSTEM (NEU) ---
+
+async function addVip(handle, displayName, publicKey) {
+    const db = await dbPromise; // Greift auf die globale Variable zu
+    try {
+        await db.run(
+            `INSERT INTO vips (handle, display_name, public_key) VALUES (?, ?, ?)`,
+            [handle, displayName, publicKey]
+        );
+        return true;
+    } catch (e) {
+        console.error("Error adding VIP:", e);
+        return false;
+    }
+}
+
+async function getVipByHandle(handle) {
+    const db = await dbPromise;
+    try {
+        return await db.get('SELECT * FROM vips WHERE handle = ?', [handle]);
+    } catch (e) {
+        console.error("Error getting VIP:", e);
+        return null;
+    }
+}
+
 module.exports = {
     initDB,
     createInstitution,
@@ -420,7 +440,6 @@ module.exports = {
     createRequest,
     verifyRequestEmail,
     getPendingRequests,
-    // --- NEU ---
     getRequestById,
     updateRequestStatus,
     createInviteToken,
@@ -433,11 +452,13 @@ module.exports = {
     getBlogPostById,
     deleteBlogPost,
     updateBlogPost,
-
     createWirePost,
     getActiveWirePosts,
     updateWirePost,
     addWireComment,
     getWireComments,
-    cleanupOrphanedComments
+    cleanupOrphanedComments,
+    // NEU
+    addVip,
+    getVipByHandle
 };

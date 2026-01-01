@@ -238,6 +238,15 @@ function openFileSystem() {
 function getDynamicName(name, key) {
     if (!key) return name;
 
+    if (key.startsWith('@')) {
+        const action = `window.openUserPopup(event, '${key}')`;
+        // Goldener oder Cyan Look für VIPs
+        const vipStyle = `color: #00ffff; text-shadow: 0 0 8px #00ffff; font-weight: bold; cursor: pointer; letter-spacing: 1px;`;
+
+        // Mit ASCII Icon
+        return `<span class="dynamic-name" style="${vipStyle}" data-key="${key}" onclick="${action}">[✓] ${name}</span>`;
+    }
+
     // --- STYLE CHECK (Institutionen) ---
     const instStyle = institutionStyles[key];
     let customStyle = 'cursor: pointer;'; // Immer klickbar jetzt
@@ -363,25 +372,32 @@ async function hashRendezvousKey(key) {
 // =============================================================================
 
 function printToChat(chatId, text, className = '') {
-    const targetId = myChats[chatId] ? chatId : 'LOCAL';
+    // 1. ID sicher in String umwandeln
+    const safeChatId = String(chatId);
+
+    // 2. Ziel bestimmen
+    const targetId = myChats[safeChatId] ? safeChatId : 'LOCAL';
     const chat = myChats[targetId];
 
+    // Element bauen
     const div = document.createElement('div');
     div.classList.add('line');
     if (className) div.classList.add(className);
+    div.innerHTML = text; // HTML erlauben
 
-    // --- FIX: innerHTML statt textContent ---
-    // Damit unsere <span class="dynamic-name"> Tags funktionieren
-    div.innerHTML = text;
-    // ----------------------------------------
-
-    // In History speichern
+    // 3. In History speichern
     chat.history.push(div.outerHTML);
 
-    if (targetId === activeChatId) {
+    // 4. LIVE UPDATE CHECK (Der Fix!)
+    // Wir vergleichen beides als String, damit "7289" === "7289" ist.
+    if (String(activeChatId) === targetId) {
+        const output = document.getElementById('output');
         output.appendChild(div);
+
+        // Sanftes Scrollen nach unten
         output.scrollTop = output.scrollHeight;
     } else {
+        // Wenn wir woanders sind -> Badge erhöhen
         chat.unread++;
         renderChatList();
     }
@@ -1471,38 +1487,37 @@ async function handleInput(text) {
                     return;
                 }
 
-                printLine("Calculations vectoring... Hashing key...", "system-msg");
-
-                // 1. Hash berechnen (Room ID)
+                // 1. Hash berechnen
                 const roomHash = await hashRendezvousKey(key);
 
-                // 2. Server anfunken
-                // WICHTIG: Wir senden nur den Hash! Niemals den Key!
+                // 2. Server anfunken (Nur Hash!)
                 socket.emit('rendezvous_enter_req', { hash: roomHash });
 
-                // 3. Key temporär speichern für die spätere Verschlüsselung
+                // 3. Key speichern
                 window.tempRendezvousKey = key;
 
-                // 4. UI Update
-                appState = 'RENDEZVOUS_WAITING';
+                // 4. WICHTIG: KEIN appState Change, KEIN Screen Clear!
+                // Wir zeigen einfach eine schöne Karte an.
 
-                // Screen leeren & Radar zeigen
-                const output = document.getElementById('output');
-                output.innerHTML = '';
-
-                const waitHtml = `
-                    <div style="text-align:center; margin-top:50px;">
-                        <h1 style="color:var(--accent-color); text-shadow:0 0 10px var(--accent-color);">SCANNING FREQUENCY</h1>
-                        <div style="font-family:monospace; margin:20px 0; color:#fff;">Target Hash: ${roomHash.substring(0, 16)}...</div>
-                        <div class="loader" style="margin: 0 auto;"></div>
-                        <p style="color:#666; margin-top:20px;">Waiting for partner signal match...</p>
-                        <button class="voice-btn danger" onclick="location.reload()">[ ABORT SIGNAL ]</button>
+                const html = `
+                    <div class="glass-card scanning" id="rendezvous-scan-card">
+                        <div class="glass-card-header">
+                            <span>📡</span> FREQUENCY SCAN ACTIVE
+                        </div>
+                        <div class="glass-card-body">
+                            Searching for partner signal...<br>
+                            <span style="font-family:monospace; font-size:0.8em; color:#666;">HASH: ${roomHash.substring(0, 12)}...</span>
+                        </div>
+                        <div class="glass-card-actions">
+                            <button class="voice-btn" style="border-color:#555; color:#aaa;" onclick="window.cancelRendezvous()">[ ABORT SCAN ]</button>
+                        </div>
                     </div>
                 `;
-                // (Optional: CSS für .loader hinzufügen, sonst Text nutzen)
-                const div = document.createElement('div');
-                div.innerHTML = waitHtml;
-                output.appendChild(div);
+
+                printToChat(activeChatId, html, '');
+
+                // Optional: Kleiner Text, dass man weiterarbeiten kann
+                printLine("(i) Scan running in background. You may continue operations.", "system-msg");
             }
 
             else {
@@ -1581,6 +1596,37 @@ async function handleInput(text) {
              printLine('USAGE: /broadcast [MESSAGE]', 'error-msg');
          }
      }
+
+        else if (cmd === '/identify') {
+            // Syntax: /identify @handle
+            // KEIN Key mehr im Befehl!
+            const handle = args[1];
+
+            if (!handle) {
+                printLine('USAGE: /identify [@HANDLE]', 'error-msg');
+                printLine('System will prompt for Identity File (.pem)', 'system-msg');
+                return;
+            }
+
+            // Wir merken uns den Handle und öffnen den File-Picker
+            window.pendingVipHandle = handle;
+            document.getElementById('identity-file-input').click();
+
+            printLine(`>>> INITIATING BIOMETRIC SCAN FOR ${handle}...`, 'system-msg');
+            printLine(`>>> PLEASE SELECT IDENTITY KEYFILE.`, 'highlight-msg');
+        }
+
+        else if (cmd === '/comms') {
+            const mode = args[1]; // 'open' oder 'close' / 'silent'
+            if (mode === 'open' || mode === 'allow') {
+                socket.emit('vip_privacy_toggle', 'OPEN');
+            } else if (mode === 'close' || mode === 'silent') {
+                socket.emit('vip_privacy_toggle', 'SILENT');
+            } else {
+                printLine('USAGE: /comms [open|silent]', 'error-msg');
+            }
+        }
+
         else if (cmd === '/ping') {
             socket.emit('ping_request', args[1] || '');
         }
@@ -2005,7 +2051,7 @@ socket.on('incoming_request', (data) => {
     updateVoiceUI('ringing', data.requesterName);
 
     const target = 'LOCAL';
-    const key = data.requesterKey; // Kürzer für String-Bau
+    const key = data.requesterKey;
 
     printToChat(target, ' ', '');
     printToChat(target, '----------------------------------------', 'partner-msg');
@@ -2018,16 +2064,12 @@ socket.on('incoming_request', (data) => {
     printToChat(target, `ACTION REQUIRED:`, 'system-msg');
     printToChat(target, `Type: /accept ${key}`, 'my-msg');
 
-    // FIX: Button als HTML-String direkt in die History injizieren
-    // Wir nutzen 'onclick="window.triggerAccept(...)"', das überlebt auch Chat-Wechsel
+    // Button Logic
     const btnHtml = `<div class="system-msg" style="margin-top:5px; cursor:pointer; color:#0f0; border:1px solid #0f0; display:inline-block; padding:5px 10px; font-weight:bold;" onclick="window.triggerAccept('${key}')">[ ACCEPT UPLINK ]</div>`;
 
-    // Wir nutzen einen Trick: Wir pushen den HTML String direkt in die History von LOCAL
-    // Dazu brauchen wir Zugriff auf das Chat-Objekt
     if (myChats['LOCAL']) {
         myChats['LOCAL'].history.push(btnHtml);
 
-        // Wenn wir gerade drauf schauen, auch anzeigen
         if (activeChatId === 'LOCAL') {
             const div = document.createElement('div');
             div.innerHTML = btnHtml;
@@ -2285,8 +2327,81 @@ socket.on('hq_internal_msg_rcv', async (data) => {
     }
 });
 
-// 4. CHAT START (Final HQ Fix)
+// CHALLENGE EMPFANGEN
+socket.on('vip_auth_challenge', async (nonce) => {
+    printLine('Identity Challenge received. Signing...', 'system-msg');
+
+    try {
+        if (!window.tempVipKeyPem) throw new Error("Key memory empty");
+
+        // 1. PEM Header/Footer entfernen für WebCrypto Import
+        const pemContent = window.tempVipKeyPem
+            .replace(/-----BEGIN PRIVATE KEY-----/g, '')
+            .replace(/-----END PRIVATE KEY-----/g, '')
+            .replace(/\s/g, ''); // Entfernt alle Whitespaces/Newlines
+
+        const binaryKey = base64ToArrayBuffer(pemContent);
+
+        // 2. Key importieren
+        const privateKey = await window.crypto.subtle.importKey(
+            "pkcs8",
+            binaryKey,
+            { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+            false,
+            ["sign"]
+        );
+
+        // 3. Nonce signieren
+        const encoder = new TextEncoder();
+        const signature = await window.crypto.subtle.sign(
+            "RSASSA-PKCS1-v1_5",
+            privateKey,
+            encoder.encode(nonce)
+        );
+
+        // 4. Hex-String senden
+        const signatureHex = Array.from(new Uint8Array(signature))
+            .map(b => b.toString(16).padStart(2, '0'))
+            .join('');
+
+        socket.emit('vip_identify_verify', signatureHex);
+
+        window.tempVipKeyPem = null; // Clean Memory
+
+    } catch (e) {
+        console.error("Signing Error:", e);
+        printLine('SIGNATURE FAILED: Key format invalid or mismatch.', 'error-msg');
+    }
+});
+
+// LOGIN ERFOLG
+socket.on('vip_login_success', (data) => {
+    myUsername = data.username;
+    myKey = data.handle; // ID ist jetzt @handle
+
+    updateUserUI(); // Footer updaten
+
+    printLine(' ', '');
+    printLine('****************************************', 'highlight-msg');
+    printLine(` IDENTITY CONFIRMED: ${data.handle.toUpperCase()}`, 'highlight-msg');
+    printLine(` WELCOME, ${data.username.toUpperCase()}.`, 'system-msg');
+    printLine(' PRIVACY SHIELD: ACTIVE (SILENT)', 'system-msg');
+    printLine('****************************************', 'highlight-msg');
+
+    // Prompt ändern
+    document.getElementById('prompt').textContent = `${data.handle}>`;
+    document.getElementById('prompt').style.color = '#00ffff'; // Cyan für VIPs
+});
+
+// 4. CHAT START (Fixed Key Lookup)
 socket.on('chat_start', async (data) => {
+
+    // --- RENDEZVOUS CLEANUP ---
+    if (window.tempRendezvousKey) {
+        setRendezvousCardState('SUCCESS');
+        window.tempRendezvousKey = null;
+    }
+
     const chatId = data.partnerKey || data.partner;
     let finalKey = null;
 
@@ -2294,39 +2409,51 @@ socket.on('chat_start', async (data) => {
     let myCorrectPubKeyString = null;
     let partnerPubKeyString = null;
 
-    // FALL A: Wir sind der Initiator
+    // FALL A: Wir sind der Initiator (Wir haben den Key vorgeschlagen)
     if (data.publicKey) {
         try {
             let usedPrivateKey;
 
-            // --- DER FIX: ZUERST DEN GLOBALEN HQ KEY PRÜFEN ---
+            // 1. Zuerst HQ Key prüfen
             if (window.hqPendingKeyPair) {
-                console.log("CLIENT DEBUG: Using HQ Pending Key!");
                 usedPrivateKey = window.hqPendingKeyPair.privateKey;
                 myCorrectPubKeyString = await exportPublicKey(window.hqPendingKeyPair.publicKey);
-
-                // WICHTIG: Sofort löschen, damit er nicht für andere Chats benutzt wird
                 window.hqPendingKeyPair = null;
             }
-                // --------------------------------------------------
-
-            // Falls kein HQ Key da war, suchen wir normal weiter (P2P Logik)
+            // 2. Reguläre Suche (P2P / Rendezvous)
             else {
-                // Versuche Key unter ChatID oder PartnerID zu finden
+                // Versuch 1: Suche nach User-Key (Normales /connect)
                 let storedData = outgoingConnects[chatId];
+
+                // Versuch 2: Suche nach Namen (Alter Code Fallback)
                 if (!storedData && data.partner) {
                     storedData = outgoingConnects[data.partner];
                     if (storedData) delete outgoingConnects[data.partner];
                 }
 
+                // --- DER FIX (Versuch 3): Suche nach IRGENDEINEM offenen Schlüssel ---
+                // Beim Rendezvous haben wir unter der Socket-ID gespeichert, die wir hier nicht kennen.
+                // Da wir aber meistens nur EINE Verbindung gleichzeitig aufbauen, nehmen wir den ersten Eintrag.
+                if (!storedData) {
+                    const pendingKeys = Object.keys(outgoingConnects);
+                    if (pendingKeys.length > 0) {
+                        const socketIdKey = pendingKeys[0]; // Nimm den ersten (z.B. die SocketID)
+                        storedData = outgoingConnects[socketIdKey];
+                        console.log(`[CRYPTO] Key found via fallback (SocketID: ${socketIdKey})`);
+                        delete outgoingConnects[socketIdKey]; // Aufräumen
+                    }
+                }
+                // -------------------------------------------------------------------
+
                 if (storedData) {
                     usedPrivateKey = storedData.privateKey;
                     myCorrectPubKeyString = storedData.publicKeyString;
+                    // Falls wir ihn über chatId gefunden hatten, jetzt löschen
                     if (outgoingConnects[chatId]) delete outgoingConnects[chatId];
                 } else {
-                    // Fallback (Notlösung)
+                    console.error("[CRYPTO ERROR] No private key found for handshake!");
+                    // Fallback (Notlösung damit es nicht crasht, aber Encryption wird failen)
                     usedPrivateKey = myKeyPair.privateKey;
-                    myCorrectPubKeyString = await exportPublicKey(myKeyPair.publicKey);
                 }
             }
 
@@ -2335,7 +2462,8 @@ socket.on('chat_start', async (data) => {
 
         } catch(e) { console.error("Key Error:", e); }
     }
-    // FALL B: Wir sind der Akzeptierer
+
+    // FALL B: Wir sind der Akzeptierer (Wir haben /accept gedrückt)
     else if (tempDerivedKey) {
         finalKey = tempDerivedKey;
         tempDerivedKey = null;
@@ -2344,6 +2472,7 @@ socket.on('chat_start', async (data) => {
     }
 
     if (finalKey) {
+        // Chat registrieren
         registerChat(chatId, data.partner, 'private', finalKey);
 
         const chat = myChats[chatId];
@@ -2352,11 +2481,11 @@ socket.on('chat_start', async (data) => {
         chat.partnerPublicKeyString = partnerPubKeyString || "UNKNOWN";
         chat.msgCount = 0;
 
-        // Automatisch wechseln wenn wir in der Inbox sind
+        // UI Updates
         if (activeChatId === 'HQ_INBOX') {
             switchChat(chatId);
         } else {
-            // Notification oder Wechsel
+            // Wenn wir gerade im Rendezvous-Screen sind, switchen wir auch
             switchChat(chatId);
         }
 
@@ -2395,8 +2524,8 @@ socket.on('message', async (data) => {
     // --- RENDEZVOUS KEY DETECTOR ---
     if (clearText.startsWith(':::RENDEZVOUS_KEY:::')) {
         const realKey = clearText.split(':::')[2];
-        showRendezvousKey(realKey); // Zeigt die fette rote Box an
-        return; // Nachricht NICHT als normalen Text anzeigen
+        showRendezvousKey(realKey); // Nutzt jetzt das neue Glass-Design
+        return;
     }
     // -------------------------------
 
@@ -2435,39 +2564,35 @@ socket.on('room_user_status', (data) => {
     printToChat(data.roomId, msg, 'system-msg');
 });
 
-// GROUP JOIN REQUEST (Für Owner & Mods - Mit Button!)
+// GROUP JOIN REQUEST (Für Owner & Mods)
 socket.on('group_join_request_alert', (data) => {
     // data: { username, userKey, groupId, isGhost }
 
     const initialName = data.isGhost ? 'Anonymous' : data.username;
     const nameHtml = getDynamicName(initialName, data.userKey);
-    const targetChat = data.groupId;
+
+    // Fix: ID als String nutzen
+    const targetChat = String(data.groupId);
     const dest = myChats[targetChat] ? targetChat : 'LOCAL';
 
     printToChat(dest, ' ', '');
     printToChat(dest, '----------------------------------------', 'partner-msg');
     printToChat(dest, `GROUP ALERT: User ${nameHtml} [${data.userKey}] wants to join.`, 'partner-msg');
 
-    // --- DER BUTTON ---
-    const btnHtml = `<div class="system-msg" style="margin-top:5px; cursor:pointer; color:#0f0; border:1px solid #0f0; display:inline-block; padding:5px 10px; font-weight:bold;" onclick="window.triggerGroupAccept('${data.userKey}')">[ ACCEPT REQUEST ]</div>`;
-
-    // Da wir printToChat mit innerHTML nutzen, können wir den Button direkt injizieren.
-    // Wir müssen ihn aber in den History-String packen.
-
-    // Trick: Wir nutzen printToChat für den Text, aber für den Button hängen wir ihn manuell an
-    // ODER wir packen ihn direkt in den printToChat Aufruf, da dieser jetzt HTML kann:
+    // Button Logic...
+    const btnHtml = `<div class="glass-card" style="cursor:pointer; border-color:#0f0; margin:5px 0;" onclick="window.triggerGroupAccept('${data.userKey}')">
+        <div class="glass-card-header" style="color:#0f0;">✅ ACCEPT REQUEST</div>
+    </div>`;
 
     printToChat(dest, btnHtml, '');
-    // ------------------
-
     printToChat(dest, '----------------------------------------', 'partner-msg');
 
-    if (activeChatId !== dest) {
-        printLine(`(i) New Join Request in ${dest}`, 'system-msg');
+    if (String(activeChatId) !== dest) {
+        printLine(`(i) New Join Request in Group ${targetChat}`, 'system-msg');
     }
 });
 
-// 6. GRUPPEN EVENTS
+// 6. GRUPPEN EVENTS (Fix: History Injection)
 socket.on('group_joined_success', async (data) => {
     // Cleanup
     if (appState === 'ENTERING_GROUP_PASSWORD') {
@@ -2478,7 +2603,7 @@ socket.on('group_joined_success', async (data) => {
 
     let key = data.key ? await importRoomKey(data.key) : null;
     const name = data.name || `Group_${data.id}`;
-    const safeId = String(data.id); // String ID
+    const safeId = String(data.id);
 
     // 1. Chat registrieren
     registerChat(safeId, name, 'group', key, data.role);
@@ -2486,16 +2611,42 @@ socket.on('group_joined_success', async (data) => {
     // 2. Ziel setzen
     activeChatId = safeId;
 
-    // 3. Ansicht wechseln (falls wir nicht da sind)
+    // --- NEU: KEY DIREKT IN DIE HISTORY SCHREIBEN ---
+    // Wir machen das VOR dem switchChat, damit es sofort mitgerendert wird.
+    if (data.rendezvousKey) {
+        const chat = myChats[safeId];
+
+        // Das Glass-Card HTML Design
+        const keyHtml = `
+            <div class="glass-card">
+                <div class="glass-card-header">
+                    <span style="color:var(--accent-color)">🔑</span> GROUP RENDEZVOUS KEY
+                </div>
+                
+                <div class="glass-key-display" onclick="navigator.clipboard.writeText('${data.rendezvousKey}'); this.style.borderColor='#fff'; setTimeout(()=>this.style.borderColor='', 200);" title="Click to Copy">
+                    ${data.rendezvousKey}
+                </div>
+                
+                <div class="glass-card-body" style="font-size:0.8em; color:#888;">
+                    This cell has a persistent re-entry key.<br>
+                    Save it to restore access later.
+                </div>
+            </div>
+        `;
+
+        // Wir pushen es als "System-Nachricht" in den Verlauf
+        chat.history.push(`<div class="line">${keyHtml}</div>`);
+    }
+    // ------------------------------------------------
+
+    // 3. Ansicht wechseln (Rendert die History inklusive Key!)
     if (viewMode !== 'CHAT') {
-        // switchMainView ruft automatisch switchChat(activeChatId, true) auf!
         switchMainView('CHAT');
     } else {
-        // Wenn wir schon im Chat-Modus sind, direkt laden
         switchChat(safeId, true);
     }
 
-    // Willkommens-Nachrichten
+    // System-Meldungen (unten anhängen)
     printToChat(safeId, '----------------------------------------');
     printToChat(safeId, `>>> SECURE GROUP ESTABLISHED: ${name} (ID: ${safeId})`, 'system-msg');
     printToChat(safeId, `>>> YOUR ROLE: ${data.role}`, 'system-msg');
@@ -2682,23 +2833,45 @@ socket.on('group_password_required', (groupId) => {
     promptSpan.className = 'prompt-warn';
 });
 
-// GROUP BROADCAST EMPFANGEN (Hervorgehoben & Dynamisch)
+// GROUP BROADCAST EMPFANGEN (Highlight & Key Detector)
 socket.on('group_broadcast_received', (data) => {
     // data: { text, senderName, senderKey, isGhost, role, groupId }
 
-    // 1. Initialen Namen bestimmen
+    // Wenn der Broadcast ein Key ist, nutzen wir das schöne Glass-Design!
+    if (data.text.startsWith(':::RENDEZVOUS_KEY:::')) {
+        const realKey = data.text.split(':::')[2];
+
+        const targetChat = String(data.groupId);
+
+        // HTML bauen (Manuell, damit wir die Chat-ID steuern können)
+        const keyHtml = `
+            <div class="glass-card">
+                <div class="glass-card-header">
+                    <span style="color:var(--accent-color)">🔑</span> GROUP RENDEZVOUS KEY
+                </div>
+                
+                <div class="glass-key-display" onclick="navigator.clipboard.writeText('${realKey}'); this.style.borderColor='#fff'; setTimeout(()=>this.style.borderColor='', 200);" title="Click to Copy">
+                    ${realKey}
+                </div>
+                
+                <div class="glass-card-body" style="font-size:0.8em; color:#888;">
+                    Secure Re-Entry Token established by ${data.senderName}.<br>
+                    Save this key to restore the group later.
+                </div>
+            </div>
+        `;
+
+        printToChat(targetChat, keyHtml, '');
+        return; // HIER STOPPEN, damit die alte "Broadcast Box" nicht kommt!
+    }
+    // -------------------------------------
+
+    // ... (Hier folgt dein normaler Broadcast Code für Text-Nachrichten) ...
     const initialName = data.isGhost ? 'Anonymous' : data.senderName;
-
-    // 2. Dynamischen HTML-Namen bauen
     const nameHtml = getDynamicName(initialName, data.senderKey);
-
-    // 3. Ziel bestimmen (Gruppen-Tab oder Local fallback)
-    const targetChat = data.groupId;
-    // Wenn wir den Chat noch nicht haben (selten), ignorieren oder Local nutzen
+    const targetChat = String(data.groupId); // ID als String!
     const dest = myChats[targetChat] ? targetChat : 'LOCAL';
 
-    // 4. Das Design bauen (ASCII Style Box)
-    // Wir nutzen CSS Border und Padding für den "Wichtig"-Effekt
     const broadcastHtml = `
         <div class="group-broadcast-box">
             <div class="group-broadcast-header">⚠️ GROUP BROADCAST [${data.role}]</div>
@@ -2707,11 +2880,9 @@ socket.on('group_broadcast_received', (data) => {
         </div>
     `;
 
-    // 5. Anzeigen (printToChat kann HTML!)
     printToChat(dest, broadcastHtml, '');
 
-    // Sound oder visueller Hinweis, falls man woanders ist
-    if (activeChatId !== dest) {
+    if (String(activeChatId) !== dest) {
         printLine(`(i) ⚠️ BROADCAST in ${myChats[dest].name}`, 'system-msg');
     }
 });
@@ -4896,19 +5067,21 @@ async function deriveSharedGroupKey(seedString) {
 
 // 1. ANFRAGE ERHALTEN (Private Chat)
 socket.on('rendezvous_proposal_rcv', (data) => {
-    // data: { senderKey, senderName }
-
-    // Popup oder In-Chat Nachricht
     const target = activeChatId === data.senderKey ? activeChatId : 'LOCAL';
 
+    // NEUES DESIGN: Clean Glass Card
     const html = `
-        <div style="border: 2px solid #ffff00; padding: 15px; background: rgba(50,50,0,0.2); margin: 10px 0;">
-            <div style="color:#ffff00; font-weight:bold;">⚠️ SECURE REENTRY PROPOSAL</div>
-            <div style="color:#ccc; margin: 5px 0;">User ${data.senderName} wants to generate a Rendezvous Key.</div>
-            <div style="font-size:0.8em; color:#888;">This allows you both to find each other again later with new identities.</div>
-            <div style="margin-top:10px; text-align:right;">
-                <button class="voice-btn" style="border-color:#0f0; color:#0f0;" onclick="socket.emit('rendezvous_proposal_response', { accepted: true, targetKey: '${data.senderKey}' })">[ ACCEPT ]</button>
-                <button class="voice-btn" style="border-color:#f00; color:#f00;" onclick="socket.emit('rendezvous_proposal_response', { accepted: false, targetKey: '${data.senderKey}' })">[ REJECT ]</button>
+        <div class="glass-card">
+            <div class="glass-card-header">
+                <span style="color:#ffd700">⚡</span> SECURE RE-ENTRY PROPOSAL
+            </div>
+            <div class="glass-card-body">
+                User <strong>${data.senderName}</strong> wants to generate a Rendezvous Key.<br>
+                <span style="font-size:0.85em; color:#888;">This allows re-connection after identity wipe.</span>
+            </div>
+            <div class="glass-card-actions">
+                <button class="voice-btn" style="border-color:#555; color:#aaa;" onclick="socket.emit('rendezvous_proposal_response', { accepted: false, targetKey: '${data.senderKey}' })">DECLINE</button>
+                <button class="voice-btn" style="border-color:var(--accent-color); color:var(--accent-color);" onclick="socket.emit('rendezvous_proposal_response', { accepted: true, targetKey: '${data.senderKey}' })">ACCEPT</button>
             </div>
         </div>
     `;
@@ -4947,84 +5120,139 @@ socket.on('rendezvous_key_reveal', (data) => {
 
 // Hilfsfunktion zum Anzeigen des Keys
 function showRendezvousKey(key) {
+    // NEUES DESIGN: Clean Glass Key Display
     const html = `
-        <div style="border: 2px dashed #f00; background: #000; padding: 20px; text-align: center; margin: 20px 0;">
-            <h2 style="color:#f00; margin:0;">SECRET RENDEZVOUS KEY</h2>
-            <p style="color:#666; font-size:0.8em;">SAVE THIS LOCALLY. IT WILL NOT BE SHOWN AGAIN.</p>
-            <div style="font-family:monospace; font-size:1.5em; color:#fff; margin: 15px 0; letter-spacing: 2px; user-select:all; cursor:pointer;" onclick="navigator.clipboard.writeText('${key}')" title="Click to Copy">
+        <div class="glass-card">
+            <div class="glass-card-header">
+                <span style="color:var(--accent-color)">🔑</span> RENDEZVOUS KEY GENERATED
+            </div>
+            
+            <div class="glass-key-display" onclick="navigator.clipboard.writeText('${key}'); this.style.borderColor='#fff'; setTimeout(()=>this.style.borderColor='', 200);" title="Click to Copy">
                 ${key}
             </div>
-            <p style="color:#444; font-size:0.8em;">To reunite: Login with new account -> /rendezvous enter [KEY]</p>
+            
+            <div class="glass-card-body" style="font-size:0.8em; color:#888;">
+                Save this key locally. It will not be shown again.<br>
+                To reconnect: Login new > <code>/rendezvous enter [KEY]</code>
+            </div>
         </div>
     `;
     printToChat(activeChatId, html, '');
 }
 
-// 4. ERFOLGREICH GEFUNDEN (Nach /rendezvous enter)
+// HELPER: Update Rendezvous Card (DOM + History)
+function setRendezvousCardState(state) {
+    let newHtml = '';
+
+    // Status 1: MATCH FOUND (Gelb/Cyan) - Noch am verhandeln
+    if (state === 'MATCHED') {
+        newHtml = `
+            <div class="glass-card" id="rendezvous-scan-card" style="border-color:#00ffff;">
+                <div class="glass-card-header" style="color:#00ffff;">⚡ SIGNAL MATCHED</div>
+                <div class="glass-card-body">
+                    Peer found. Negotiating encryption handshake...
+                </div>
+            </div>
+        `;
+    }
+    // Status 2: SUCCESS (Grün) - Verbunden
+    else if (state === 'SUCCESS') {
+        newHtml = `
+            <div class="glass-card" style="border-color:#0f0;">
+                <div class="glass-card-header" style="color:#0f0;">✅ UPLINK ESTABLISHED</div>
+                <div class="glass-card-body">
+                    Secure channel active. Redirecting...
+                </div>
+            </div>
+        `;
+    }
+
+    // A) Update LIVE DOM (falls sichtbar)
+    const card = document.getElementById('rendezvous-scan-card');
+    if (card) {
+        card.outerHTML = newHtml; // Ersetzt das komplette Element
+    }
+
+    // B) Update HISTORY SPEICHER (WICHTIG!)
+    // Wir gehen davon aus, dass der Scan im LOCAL Chat lief
+    const chat = myChats['LOCAL'];
+    if (chat && chat.history) {
+        chat.history = chat.history.map(line => {
+            // Wir suchen die Zeile, die die ID enthält
+            if (line.includes('id="rendezvous-scan-card"')) {
+                return newHtml; // Überschreiben
+            }
+            return line;
+        });
+    }
+}
+
+// 4. ERFOLGREICH GEFUNDEN
 socket.on('rendezvous_match_found', async (data) => {
-    // data: { peerSocketId, isCreator (wer zuerst da war), type: 'private' }
-
-    // Bildschirm aufräumen
-    const output = document.getElementById('output');
-    output.innerHTML = '';
-
-    printLine(">>> SIGNAL MATCHED. ESTABLISHING UPLINK...", "success-msg");
+    // UI Update: Match gefunden (aber noch nicht fertig)
+    setRendezvousCardState('MATCHED');
 
     if (data.type === 'private') {
-        // P2P Handshake starten
-        // Da wir keinen "Public Key" des anderen haben (neue Identität!), müssen wir einen neuen Exchange machen.
-        // Der Server hat uns verbunden. Jetzt verhalten wir uns wie bei /connect.
-
         if (data.role === 'initiator') {
-            // Ich bin der Erste/Initiator der Verbindung -> Ich sende Offer
-            printLine("Initiating Key Exchange with Target...", "system-msg");
-
-            // Normale Connect Logik
+            // ... (Dein Key Generation Code bleibt gleich) ...
             const ephemeralKeyPair = await generateKeyPair();
             const pubKeyPem = await exportPublicKey(ephemeralKeyPair.publicKey);
 
-            // Speichern
             outgoingConnects[data.peerSocketId] = {
                 privateKey: ephemeralKeyPair.privateKey,
                 publicKeyString: pubKeyPem
             };
 
-            // Via Server an den anderen senden (der Server muss das weiterleiten an den Socket)
             socket.emit('rendezvous_handshake_init', {
                 targetSocketId: data.peerSocketId,
                 publicKey: pubKeyPem
             });
         }
         else {
-            printLine("Waiting for secure handshake...", "system-msg");
+            // Ich bin der Peer -> Warten auf Handshake
+            // (Die Karte zeigt ja jetzt "Negotiating..." an, das reicht als Info)
         }
     }
-
-    appState = 'IDLE'; // Zurücksetzen
 });
 
-// GROUP RESTORE SUCCESS
+// GROUP RESTORE SUCCESS (Fix: String ID & Auto-Switch)
 socket.on('rendezvous_group_restored', async (data) => {
-    // data: { groupId, name, role, key (encrypted?) }
+    // data: { groupId, name, role, key }
 
-    // Da wir den Key schon haben (wir haben ihn ja eingegeben),
-    // müssen wir hier nur den Chat registrieren.
-    // Der Gruppen-Key für die Verschlüsselung muss aus dem Rendezvous-Key abgeleitet werden!
+    // 1. UI UPDATE: Scanner beenden
+    setRendezvousCardState('SUCCESS');
+    window.tempRendezvousKey = null;
 
-    if (window.tempRendezvousKey) {
-        // Wir leiten den Encryption Key vom Rendezvous Key ab
-        // Das garantiert, dass nur Inhaber des Keys lesen können
-        const groupCryptoKey = await deriveSharedGroupKey(window.tempRendezvousKey);
+    // 2. ID FIX: Sicherstellen, dass es ein String ist!
+    const safeGroupId = String(data.groupId);
 
-        registerChat(data.groupId, data.name, 'group', groupCryptoKey, data.role);
+    // 3. KEY LOGIK
+    let groupKeyToUse = null;
+    if (data.key) {
+        groupKeyToUse = await importRoomKey(data.key);
+    }
+    else if (window.tempRendezvousKey) {
+        groupKeyToUse = await deriveSharedGroupKey(window.tempRendezvousKey);
+    }
 
-        // Direkt rein
-        switchChat(data.groupId, true);
+    if (groupKeyToUse) {
+        // Chat registrieren (mit String ID)
+        registerChat(safeGroupId, data.name, 'group', groupKeyToUse, data.role);
 
-        printLine(`>>> SLEEPER CELL ACTIVATED: ${data.name}`, "success-msg");
-        printLine(`>>> YOUR STATUS: ${data.role}`, "system-msg");
+        // WICHTIG: Ansicht erzwingen
+        if (viewMode !== 'CHAT') {
+            switchMainView('CHAT');
+        }
 
-        window.tempRendezvousKey = null; // Löschen aus RAM
+        // In den Chat springen (mit String ID)
+        switchChat(safeGroupId, true);
+
+        // Nachrichten direkt in den Gruppen-Chat schreiben
+        printToChat(safeGroupId, `>>> SLEEPER CELL ACTIVATED: ${data.name}`, "success-msg");
+        printToChat(safeGroupId, `>>> FREQUENCY MATCHED. JOINING CELL #${safeGroupId}.`, "system-msg");
+
+        // Sidebar neu malen, damit die Gruppe sicher auftaucht
+        renderChatList();
     }
 });
 
@@ -6395,6 +6623,75 @@ function updateVoicePanelVisibility() {
             panel.classList.remove('voice-panel-hidden');
         }
     }
+}
+
+window.cancelRendezvous = () => {
+    // 1. Visuelles Feedback: Karte entfernen oder ändern
+    const card = document.getElementById('rendezvous-scan-card');
+    if (card) {
+        card.classList.remove('scanning');
+        card.style.borderColor = '#555';
+        card.innerHTML = `
+            <div class="glass-card-header" style="color:#888;">🚫 SCAN ABORTED</div>
+            <div class="glass-card-body" style="color:#666;">Frequency search terminated by user.</div>
+        `;
+    }
+
+    // BESSER: Ein kurzes Signal an Server
+    socket.emit('rendezvous_cancel_req'); // (Müsstest du im Server noch abfangen, aber ist optional)
+
+    window.tempRendezvousKey = null;
+    printLine("Rendezvous protocol deactivated.", "system-msg");
+};
+
+// --- IDENTITY FILE HANDLER ---
+const identityInput = document.getElementById('identity-file-input');
+
+if (identityInput) {
+    identityInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (!file) return;
+
+        if (!window.pendingVipHandle) {
+            printLine("ERROR: No identity session active. Type /identify [@HANDLE] first.", "error-msg");
+            return;
+        }
+
+        const reader = new FileReader();
+
+        reader.onload = function(evt) {
+            const rawKey = evt.target.result;
+
+            // Key im RAM speichern (Base64 Decode nicht nötig, da File meist Plaintext PEM ist)
+            // Wir müssen prüfen: Ist es Base64 (vom Tool) oder PEM (Text)?
+            // Unser Tool spuckt Base64 aus. Falls der User das in eine Datei speichert,
+            // ist der Inhalt der Datei Base64.
+
+            try {
+                // Versuch 1: Ist es der Base64 String aus dem Tool?
+                // Wir tun so, als hätten wir atob() gemacht.
+                window.tempVipKeyPem = atob(rawKey.trim());
+            } catch (err) {
+                // Versuch 2: Vielleicht ist es schon PEM (Klartext)?
+                window.tempVipKeyPem = rawKey;
+            }
+
+            printLine(`KEYFILE LOADED: ${file.name} (${file.size} bytes)`, 'success-msg');
+            printLine(`Contacting Identity Server...`, 'system-msg');
+
+            // Challenge anfordern
+            socket.emit('vip_identify_init', { handle: window.pendingVipHandle });
+
+            // Input resetten für nächstes Mal
+            identityInput.value = '';
+        };
+
+        reader.onerror = function() {
+            printLine("ERROR: Failed to read identity file.", "error-msg");
+        };
+
+        reader.readAsText(file);
+    });
 }
 
 // --- INIT ---

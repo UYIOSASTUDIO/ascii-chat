@@ -20,6 +20,7 @@ const publicVapidKey = process.env.VAPID_PUBLIC_KEY;
 const privateVapidKey = process.env.VAPID_PRIVATE_KEY;
 
 const setupSessions = {}; // Temp-Speicher für Setup-Daten
+const authChallenges = {}; // { socketId: { handle, nonce, timestamp } }
 
 const activeGroupLinks = {};
 const groups = {};
@@ -271,16 +272,16 @@ io.on('connection', (socket) => {
         if (data && data.groups && Array.isArray(data.groups)) {
             data.groups.forEach(roomName => {
 
-                // --- DER FIX: TYP PRÜFEN ---
-                if (typeof roomName !== 'string') return; // Überspringen, wenn kein String!
-                // ---------------------------
+                // --- BUGFIX: TYP PRÜFEN ---
+                if (typeof roomName !== 'string') return; // Überspringen, wenn kein Text!
+                // --------------------------
 
                 // 1. Ist es eine Private Gruppe?
                 if (roomName.startsWith('group_')) {
                     const groupId = roomName.replace('group_', '');
                     const group = privateGroups[groupId];
 
-                    // Prüfen, ob User berechtigt ist (Name-Match als einfacher Check)
+                    // Check: Ist User wirklich in der Gruppe?
                     const isLegitMember = group && group.members.some(memberSocketId => {
                         const u = users[memberSocketId];
                         return u && u.username === socket.username;
@@ -288,8 +289,6 @@ io.on('connection', (socket) => {
 
                     if (isLegitMember) {
                         socket.join(roomName);
-                    } else {
-                        // console.log(`   -> BLOCKED join attempt to ${roomName}`);
                     }
                 }
                 // 2. Public Rooms sind okay
@@ -1096,6 +1095,105 @@ io.on('connection', (socket) => {
         }
     });
 
+    // --- VIP IDENTITY PROTOCOL ---
+
+    // 1. User startet Identifizierung
+    socket.on('vip_identify_init', async (data) => {
+        console.log(`[VIP] Auth attempt for handle: ${data.handle}`); // LOG
+
+        try {
+            const vip = await db.getVipByHandle(data.handle);
+
+            if (!vip) {
+                console.log(`[VIP] Handle ${data.handle} not found in DB.`);
+                socket.emit('system_message', 'ERROR: Identity record not found.');
+                return;
+            }
+
+            const nonce = crypto.randomBytes(32).toString('hex');
+
+            authChallenges[socket.id] = {
+                handle: vip.handle,
+                publicKey: vip.public_key,
+                displayName: vip.display_name,
+                nonce: nonce,
+                ts: Date.now()
+            };
+
+            socket.emit('vip_auth_challenge', nonce);
+
+        } catch (err) {
+            console.error("[VIP] DB Error:", err);
+            socket.emit('system_message', 'ERROR: Internal Identity Server Fault.');
+        }
+    });
+
+    // 2. User sendet Unterschrift
+    socket.on('vip_identify_verify', (signatureHex) => {
+        const session = authChallenges[socket.id];
+        if (!session) {
+            socket.emit('system_message', 'ERROR: Auth session expired.');
+            return;
+        }
+
+        try {
+            const verifier = crypto.createVerify('SHA256');
+            verifier.update(session.nonce);
+            verifier.end();
+
+            // --- KEY REKONSTRUKTION ---
+            // Wir fügen die Header wieder hinzu und sorgen für 64-Zeichen Zeilenumbrüche (Standard PEM)
+            // Node.js akzeptiert oft auch Einzeiler, aber wir machen es sauber.
+            const rawBody = session.publicKey;
+            const match = rawBody.match(/.{1,64}/g);
+            const bodyFormatted = match ? match.join('\n') : rawBody;
+
+            const pemKey = `-----BEGIN PUBLIC KEY-----\n${bodyFormatted}\n-----END PUBLIC KEY-----`;
+
+            // Verifizieren
+            const isValid = verifier.verify(pemKey, signatureHex, 'hex');
+
+            if (isValid) {
+                // ERFOLG!
+                const user = users[socket.id];
+
+                user.isVIP = true;
+                user.vipHandle = session.handle;
+                user.username = session.displayName;
+                user.vipPrivacy = 'SILENT';
+
+                // WICHTIG: Key überschreiben, damit der neue Name überall angezeigt wird
+                user.key = session.handle;
+
+                socket.emit('vip_login_success', {
+                    handle: session.handle,
+                    username: session.displayName
+                });
+
+                serverLog(`VIP LOGIN SUCCESS: ${session.handle}`);
+            } else {
+                console.log(`[VIP AUTH FAIL] Signature mismatch for ${session.handle}`);
+                socket.emit('system_message', 'ACCESS DENIED: Cryptographic signature invalid.');
+            }
+        } catch (e) {
+            console.error("[VIP AUTH CRASH]", e); // Das zeigt uns den wahren Fehler im Terminal!
+            socket.emit('system_message', 'ERROR: Verification protocol crashed (Check Server Logs).');
+        }
+
+        delete authChallenges[socket.id];
+    });
+
+    // 3. Privacy Shield Toggle (/comms)
+    socket.on('vip_privacy_toggle', (state) => {
+        const user = users[socket.id];
+        if (!user || !user.isVIP) return;
+
+        // state: 'OPEN' oder 'SILENT'
+        user.vipPrivacy = state;
+        const color = state === 'OPEN' ? '#0f0' : '#f00';
+        socket.emit('system_message', `COMMS STATUS: <span style="color:${color}">${state}</span>. Incoming requests are ${state === 'OPEN' ? 'ALLOWED' : 'BLOCKED'}.`);
+    });
+
     // 1. REGISTRIERUNG
     socket.on('register', (usernameInput) => { // Umbenannt zu usernameInput für Klarheit
 
@@ -1371,7 +1469,7 @@ io.on('connection', (socket) => {
         socket.emit('profile_details_result', response);
     });
 
-    // 5. VERBINDUNGSANFRAGE (Ghost Aware & HQ Compatible)
+    // 5. VERBINDUNGSANFRAGE (Ghost Aware & VIP Privacy Shield)
     socket.on('request_connection', (data) => {
         // Spam Schutz
         const now = Date.now();
@@ -1388,26 +1486,37 @@ io.on('connection', (socket) => {
         const requester = users[socket.id];
         if (!requester) return;
 
-        // --- LOGIK UPDATE ANFANG ---
-
+        // --- ZIEL ERMITTELN ---
         let targetId = null;
 
-        // 1. Prüfen: Ist 'data.targetKey' vielleicht direkt eine Socket-ID? (HQ Button Fall)
+        // 1. Ist 'data.targetKey' direkt eine Socket-ID?
         if (users[data.targetKey]) {
             targetId = data.targetKey;
         }
-        // 2. Fallback: Ist es ein Fingerabdruck/Key? (Manueller /connect Fall)
+        // 2. Fallback: Suche nach Key ODER Handle (@name)
         else {
             targetId = Object.keys(users).find(id => users[id].key === data.targetKey);
         }
 
-        // --- LOGIK UPDATE ENDE ---
-
         if (targetId && targetId !== socket.id) {
+            const targetUser = users[targetId];
 
-            // --- GHOST LOGIK: Name maskieren ---
+            // --- VIP PRIVACY SHIELD (DER NEUE CODE) ---
+            if (targetUser && targetUser.isVIP) {
+                // Ausnahme: Wenn ICH (Sender) auch ein VIP bin, darf ich durch
+                const amIVip = requester.isVIP;
+
+                if (targetUser.vipPrivacy === 'SILENT' && !amIVip) {
+                    socket.emit('system_message', 'ERROR: UPLINK REFUSED. TARGET IS IN SILENT MODE.');
+                    return; // STOPP! Hier wird abgebrochen.
+                }
+            }
+            // ------------------------------------------
+
+            // --- GHOST LOGIK ---
             const displayRequesterName = requester.isGhost ? 'Anonymous' : requester.username;
 
+            // SENDEN (NUR EINMAL!)
             io.to(targetId).emit('incoming_request', {
                 requesterId: socket.id,
                 requesterName: displayRequesterName,
@@ -1415,13 +1524,12 @@ io.on('connection', (socket) => {
                 publicKey: data.publicKey
             });
 
-            const targetUser = users[targetId];
+            // Push Notification
             sendPush(targetUser, 'INCOMING CONNECTION', `Node ${displayRequesterName} requests secure handshake.`);
 
-            socket.emit('system_message', `SECURE HANDSHAKE: Request sent to ${users[targetId].username}...`);
+            socket.emit('system_message', `SECURE HANDSHAKE: Request sent to ${targetUser.username}...`);
         } else {
-            // Hier geben wir jetzt die ID/Key aus, damit man sieht, was gesucht wurde
-            socket.emit('system_message', `FEHLER: Target '${data.targetKey}' nicht gefunden oder offline.`);
+            socket.emit('system_message', `ERROR: Target '${data.targetKey}' not found or offline.`);
         }
     });
 
@@ -1859,7 +1967,6 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 2. JOIN REQUEST (/group join ID)
     // 2. JOIN REQUEST (/group join ID) - ADMIN UPDATE (Skeleton Key)
     socket.on('group_join_req', (groupId) => {
         // 1. CRASH PREVENTION
@@ -1903,7 +2010,8 @@ io.on('connection', (socket) => {
                 id: group.id,
                 name: group.name,
                 key: group.key,
-                role: user.isAdmin ? 'ADMIN' : 'MEMBER' // Rolle korrekt anzeigen
+                role: user.isAdmin ? 'ADMIN' : 'MEMBER', // Rolle korrekt anzeigen
+                rendezvousKey: group.rendezvousKey || null
             });
 
             // Nachricht an die Gruppe anpassen
@@ -1977,7 +2085,8 @@ io.on('connection', (socket) => {
             id: group.id,
             name: group.name,
             key: group.key,
-            role: 'MEMBER'
+            role: 'MEMBER',
+            rendezvousKey: group.rendezvousKey || null
         });
 
         // Nachricht an Gruppe (Dynamisch)
@@ -2114,7 +2223,8 @@ io.on('connection', (socket) => {
                     id: group.id,
                     name: group.name,
                     key: group.key,
-                    role: 'MEMBER'
+                    role: 'MEMBER',
+                    rendezvousKey: group.rendezvousKey || null
                 });
 
                 // Promo Update
@@ -2162,7 +2272,8 @@ io.on('connection', (socket) => {
                             id: group.id,
                             name: group.name,
                             key: group.key,
-                            role: 'MEMBER'
+                            role: 'MEMBER',
+                            rendezvousKey: group.rendezvousKey || null
                         });
 
                         // WICHTIG: Das hier sendet die dynamische "Approved" Nachricht
@@ -2351,7 +2462,8 @@ io.on('connection', (socket) => {
             id: group.id,
             name: group.name,
             role: 'MEMBER',
-            key: group.key
+            key: group.key,
+            rendezvousKey: group.rendezvousKey || null
         });
 
         // 5. Nachricht an die Gruppe (An den richtigen Raum!)
@@ -3585,27 +3697,50 @@ io.on('connection', (socket) => {
 
     // C) GROUP CHAT: KEY REGISTRIEREN
     socket.on('rendezvous_group_create', async (data) => {
-        // data: { groupId, key } -> Key ist im Klartext vom Client
+        // data: { groupId, key }
         const user = users[socket.id];
         const group = privateGroups[data.groupId];
 
         if (!user || !group) return;
-        if (group.ownerId !== socket.id && !group.mods.includes(socket.id)) return; // Nur Owner/Mod
+        if (group.ownerId !== socket.id && !group.mods.includes(socket.id)) return;
 
-        // 1. Key Hashen (Der Server speichert NUR den Hash!)
+        // --- LIMIT CHECK ---
+        // Wenn die Gruppe schon einen Key hat, senden wir diesen zurück, statt einen neuen zu machen!
+        if (group.rendezvousKey) {
+            socket.emit('system_message', 'INFO: Group already has an active Rendezvous Key.');
+
+            // Dem User, der gefragt hat, den existierenden Key nochmal zeigen (privat)
+            // Wir "faken" einen Broadcast nur an ihn
+            socket.emit('group_broadcast_received', {
+                text: `:::RENDEZVOUS_KEY:::${group.rendezvousKey}`, // Den GESPEICHERTEN Key nehmen
+                senderName: "SYSTEM",
+                senderKey: null,
+                isGhost: false,
+                role: 'SYSTEM',
+                groupId: group.id
+            });
+            return;
+        }
+        // -------------------
+
+        // 1. Key Hashen (für Wiederherstellung)
         const hash = await serverHash(data.key);
 
         // 2. Mapping speichern
         rendezvousGroups[hash] = {
             groupId: group.id,
-            groupName: group.name, // Wichtig für Wiederherstellung
+            groupName: group.name,
             created: Date.now()
         };
 
-        // 3. Bestätigung an die Gruppe
+        // 3. WICHTIG: Key in der Gruppe speichern (Klartext im RAM)
+        // Damit wir ihn neuen Usern zeigen können.
+        group.rendezvousKey = data.key;
+
+        // 4. Bestätigung an die Gruppe (Alle sehen den neuen Key)
         const role = group.ownerId === socket.id ? 'OWNER' : 'MOD';
         io.to(`group_${group.id}`).emit('group_broadcast_received', {
-            text: `:::RENDEZVOUS_KEY:::${data.key}`, // Der magische String für den Client
+            text: `:::RENDEZVOUS_KEY:::${data.key}`,
             senderName: user.username,
             senderKey: user.key,
             isGhost: !!user.isGhost,
@@ -3613,10 +3748,10 @@ io.on('connection', (socket) => {
             groupId: group.id
         });
 
-        serverLog(`Rendezvous Point erstellt für Gruppe ${group.id} (Hash: ${hash.substring(0,8)}...)`);
+        serverLog(`Rendezvous Point erstellt für Gruppe ${group.id}`);
     });
 
-    // D) ENTER RENDEZVOUS (DER KERN)
+    // D) ENTER RENDEZVOUS (DER KERN - FIXED OWNER)
     socket.on('rendezvous_enter_req', (data) => {
         const user = users[socket.id];
         const hash = data.hash;
@@ -3628,100 +3763,131 @@ io.on('connection', (socket) => {
         // --- CHECK 1: IST ES EINE GRUPPE? ---
         if (rendezvousGroups[hash]) {
             const rGroup = rendezvousGroups[hash];
-            let group = privateGroups[rGroup.groupId];
-            let role = 'MEMBER';
 
-            // FALL 1: Gruppe existiert noch
-            if (group) {
-                // Einfach joinen
-                if (!group.members.includes(socket.id)) {
-                    group.members.push(socket.id);
-                    socket.join(`group_${group.id}`);
-                    user.currentGroup = group.id;
+            // Wir prüfen, ob die *alte* ID noch aktiv ist
+            let activeGroup = privateGroups[rGroup.groupId];
+            let targetGroupId = rGroup.groupId;
+            let role = 'MEMBER'; // Standard
+            let statusMsg = "";
+
+            // FALL 1: Gruppe existiert noch (lebt im RAM)
+            if (activeGroup) {
+                // User hinzufügen, falls noch nicht drin
+                if (!activeGroup.members.includes(socket.id)) {
+                    activeGroup.members.push(socket.id);
+                    socket.join(`group_${targetGroupId}`);
+                    user.currentGroup = targetGroupId;
+                }
+
+                // --- OWNER CHECK (WICHTIG!) ---
+                // Wenn die Gruppe leer war (wir sind der erste Rückkehrer)
+                // oder der alte Owner-Socket nicht mehr existiert:
+                const currentOwnerOnline = io.sockets.sockets.get(activeGroup.ownerId);
+
+                if (!currentOwnerOnline) {
+                    // Wir übernehmen die Führung!
+                    activeGroup.ownerId = socket.id;
+                    role = 'OWNER';
+                    statusMsg = `Frequency matched. You have claimed ownership of active cell #${targetGroupId}.`;
+                } else if (activeGroup.ownerId === socket.id) {
+                    role = 'OWNER'; // Wir sind schon der Boss
+                    statusMsg = `Welcome back, Commander.`;
+                } else {
+                    role = 'MEMBER'; // Jemand anderes ist schon Boss
+                    statusMsg = `Frequency matched. Joining active cell #${targetGroupId}.`;
                 }
             }
-            // FALL 2: Gruppe war gelöscht ("Sleeper Cell")
-            else {
-                // Wir erwecken sie wieder zum Leben!
-                serverLog(`[RENDEZVOUS] Sleeper Cell ${rGroup.groupName} aktiviert von ${user.username}`);
 
-                // Gruppe neu erstellen im RAM
-                privateGroups[rGroup.groupId] = {
-                    id: rGroup.groupId,
-                    name: rGroup.groupName,
-                    ownerId: socket.id, // Der Erste wird OWNER!
+            // FALL 2: Gruppe war gelöscht ("Sleeper Cell") -> WIEDERBELEBEN
+            else {
+                // --- FREQUENCY HOPPING (Neue ID generieren) ---
+                const newGroupId = Math.floor(Math.random() * 9000) + 1000;
+
+                // Mapping aktualisieren
+                rendezvousGroups[hash].groupId = newGroupId;
+                targetGroupId = newGroupId;
+
+                serverLog(`[RENDEZVOUS] Sleeper Cell '${rGroup.groupName}' restored on new freq #${newGroupId}`);
+
+                // Gruppe neu erstellen
+                privateGroups[newGroupId] = {
+                    id: newGroupId,
+                    name: rGroup.groupName, // Alter Name
+                    ownerId: socket.id,     // <--- WICHTIG: DU BIST OWNER
                     members: [socket.id],
                     mods: [],
-                    key: "RESTORED_" + Date.now(), // Neuer interner Key
+                    key: "RESTORED_" + Date.now(),
+                    rendezvousKey: null, // Key liegt ja im Hash-Mapping
                     pendingJoins: [],
                     invitedUsers: [],
                     isPublic: false
                 };
-                group = privateGroups[rGroup.groupId];
-                role = 'OWNER'; // Belohnung fürs Wecken
 
-                socket.join(`group_${group.id}`);
-                user.currentGroup = group.id;
+                socket.join(`group_${newGroupId}`);
+                user.currentGroup = newGroupId;
+
+                role = 'OWNER'; // <--- EXPLIZIT SETZEN
+
+                statusMsg = `>>> SLEEPER CELL ACTIVATED. FREQUENCY SHIFTED TO #${newGroupId}.`;
             }
 
-            // Erfolg an Client senden
+            // Erfolg an Client senden (Hier wird die Rolle übergeben!)
             socket.emit('rendezvous_group_restored', {
-                groupId: group.id,
-                name: group.name,
-                role: role
+                groupId: targetGroupId,
+                name: rendezvousGroups[hash].groupName,
+                role: role,
+                // --- DER FIX: DEN ECHTEN GRUPPEN-KEY MITSENDEN ---
+                key: (activeGroup || privateGroups[targetGroupId]).key
+                // -------------------------------------------------
             });
 
             // Status an Gruppe
-            io.to(`group_${group.id}`).emit('room_user_status', {
+            io.to(`group_${targetGroupId}`).emit('room_user_status', {
                 username: user.username,
                 key: user.key,
                 isGhost: !!user.isGhost,
                 type: 'join',
                 context: 'group',
-                roomId: group.id
+                roomId: targetGroupId
             });
 
-            // WICHTIG: Damit wir nicht weiter nach Private Chats suchen
+            // System Info senden (Verzögert für Effekt)
+            setTimeout(() => {
+                io.to(`group_${targetGroupId}`).emit('system_message', statusMsg);
+                // Promo Update
+                io.emit('promo_update', generatePromoList());
+            }, 500);
+
             return;
         }
 
-        // --- CHECK 2: IST ES EIN PRIVATE CHAT? (P2P) ---
-
-        // Ist schon jemand da?
+        // --- CHECK 2: PRIVATE CHAT (Code bleibt gleich) ---
         if (rendezvousWaiting[hash]) {
+            // ... (Hier nichts ändern am Private Chat Code) ...
             const waiter = rendezvousWaiting[hash];
-
-            // Sicherheitscheck: Ist der Wartende noch online?
             const waiterSocket = io.sockets.sockets.get(waiter.socketId);
 
             if (waiterSocket) {
-                // MATCH FOUND!
                 serverLog(`[RENDEZVOUS] Match found: ${user.username} <-> Waiting Socket`);
-
-                // 1. An den NEUEN (Mich): "Du bist der Peer"
-                socket.emit('rendezvous_match_found', {
-                    peerSocketId: waiter.socketId,
-                    role: 'peer',
-                    type: 'private'
-                });
-
-                // 2. An den WARTENDEN: "Du bist der Initiator"
-                waiterSocket.emit('rendezvous_match_found', {
-                    peerSocketId: socket.id,
-                    role: 'initiator',
-                    type: 'private'
-                });
-
-                // Warteraum leeren
+                socket.emit('rendezvous_match_found', { peerSocketId: waiter.socketId, role: 'peer', type: 'private' });
+                waiterSocket.emit('rendezvous_match_found', { peerSocketId: socket.id, role: 'initiator', type: 'private' });
                 delete rendezvousWaiting[hash];
             } else {
-                // Wartender ist weg -> Überschreiben
                 rendezvousWaiting[hash] = { socketId: socket.id, timestamp: Date.now() };
             }
         } else {
-            // Niemand da -> Ich warte
             rendezvousWaiting[hash] = { socketId: socket.id, timestamp: Date.now() };
-            // (Client zeigt schon Radar Animation an)
+        }
+    });
+
+    // In server.js
+    socket.on('rendezvous_cancel_req', () => {
+        // User aus der Warteliste suchen und löschen
+        for (const [hash, waiter] of Object.entries(rendezvousWaiting)) {
+            if (waiter.socketId === socket.id) {
+                delete rendezvousWaiting[hash];
+                break;
+            }
         }
     });
 
