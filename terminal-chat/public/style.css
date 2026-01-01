@@ -51,7 +51,7 @@ header {
     flex-shrink: 0;    /* VERBIETET das Schrumpfen, egal wie voll der Chat ist */
 
     padding: 0 5px;
-    background-color: rgba(10, 10, 10, 0.95);
+    background-color: var(--panel-bg);
     border-bottom: 1px solid #333;
     position: relative;
     z-index: 100;
@@ -391,6 +391,7 @@ header {
     flex-shrink: 0;
     position: relative;    /* Wichtig für Autocomplete Position */
     z-index: 50;
+    transform: translate3d(0,0,0);
 }
 
 /* Der Wrapper für Prompt und Input */
@@ -482,27 +483,37 @@ header {
 }
 
 /* ==========================================================================
-   MODERN AUTOCOMPLETE (Floating aligned to Input)
+   ULTIMATE GLASS FIX (Solid Blur)
    ========================================================================== */
 
 .autocomplete-items {
     position: absolute;
     bottom: 100%;
-    /* Da .input-area jetzt schwebt, richten wir das Popup bündig dazu aus */
     left: 0;
     right: 0;
-    margin-bottom: 10px; /* Kleiner Abstand zwischen Input-Bar und Popup */
+    margin-bottom: 10px;
 
-    /* GLASS LOOK (Identisch) */
-    background: rgba(25, 25, 25, 0.85);
+    /* 1. DECKKRAFT ERHÖHEN (Der Fix) */
+    /* Wir gehen auf 0.85 (85%) hoch.
+       Das lässt immer noch Licht durch, blockiert aber die Lesbarkeit des Textes dahinter. */
+    background: rgba(10, 10, 10, 0.85);
+
+    /* 2. BLUR ANPASSEN */
+    /* Saturate entfernt, da es den weißen Text dahinter manchmal ZU stark leuchten lässt */
     -webkit-backdrop-filter: blur(20px);
     backdrop-filter: blur(20px);
 
-    border: 1px solid rgba(255, 255, 255, 0.1);
-    border-radius: 14px; /* Gleicher Radius wie Input */
+    /* 3. STACKING CONTEXT FIX */
+    /* Hilft dem Browser, den Blur korrekt über dem anderen Glas-Element zu rendern */
+    transform: translate3d(0, 0, 0);
 
+    /* RAHMEN & FORM */
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 14px;
+
+    /* SCHATTEN */
     box-shadow:
-            0 10px 40px rgba(0, 0, 0, 0.6),
+            0 20px 60px rgba(0, 0, 0, 0.95), /* Sehr tiefer Schatten für Abstand */
             inset 0 1px 0 rgba(255, 255, 255, 0.05);
 
     z-index: 9999;
@@ -1576,3 +1587,68 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
     align-items: center;
 }
 .voice-status-led { margin-right: 5px; animation: blink 2s infinite; }
+
+/* --- MANUAL VIEW --- */
+#manual-view {
+    flex: 1;
+    overflow-y: auto;
+    padding: 40px;
+    background-color: var(--bg-color);
+    color: #ccc;
+    font-family: 'Fira Code', monospace;
+}
+
+.manual-content {
+    max-width: 800px;
+    margin: 0 auto;
+}
+
+#manual-view h1 {
+    color: var(--accent-color);
+    border-bottom: 2px solid #333;
+    padding-bottom: 15px;
+    margin-bottom: 20px;
+    font-size: 1.5em;
+    letter-spacing: 2px;
+}
+
+#manual-view h2 {
+    color: #fff;
+    font-size: 1.1em;
+    margin-top: 30px;
+    margin-bottom: 15px;
+    background: rgba(255, 255, 255, 0.05);
+    padding: 8px 12px;
+    border-left: 3px solid var(--accent-color);
+}
+
+.manual-intro {
+    color: #888;
+    margin-bottom: 30px;
+    font-style: italic;
+}
+
+.cmd-row {
+    display: flex;
+    margin-bottom: 8px;
+    padding: 8px 0;
+    border-bottom: 1px dashed rgba(255, 255, 255, 0.05);
+}
+
+.manual-section .cmd {
+    color: var(--accent-color);
+    font-weight: bold;
+    min-width: 200px; /* Feste Breite für Befehle */
+    display: inline-block;
+}
+
+.manual-section .desc {
+    color: #aaa;
+    flex: 1;
+}
+
+/* Mobile Anpassung */
+@media (max-width: 700px) {
+    .cmd-row { flex-direction: column; }
+    .manual-section .cmd { margin-bottom: 4px; }
+}

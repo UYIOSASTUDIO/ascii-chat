@@ -205,6 +205,22 @@ function openFileSystem() {
         alert("ACCESS DENIED. Login required.");
         return;
     }
+
+    // --- NEU: SECURITY CHECK ---
+    if (appState === 'BOOTING' || !myUsername) {
+        // Feedback
+        const output = document.getElementById('output');
+        if(output) {
+            const div = document.createElement('div');
+            div.className = 'line error-msg';
+            div.textContent = '>> ACCESS DENIED: SECURE UPLINK NOT ESTABLISHED.';
+            output.appendChild(div);
+            output.scrollTop = output.scrollHeight;
+        }
+        return;
+    }
+    // ---------------------------
+
     // Speichern für die neue Seite
     localStorage.setItem('fs_username', myUsername);
 
@@ -317,6 +333,29 @@ async function decryptMessage(encryptedData, key) {
     } catch (e) {
         return "[DECRYPTION FAILED]";
     }
+}
+
+// --- RENDEZVOUS CRYPTO HELPERS ---
+
+// 1. Generiert einen lesbaren Key (z.B. "NEON-FOX-DELTA-99")
+function generateReadableKey() {
+    const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; // Kein O/0 oder I/1 zur Sicherheit
+    let result = "";
+    for (let i = 0; i < 16; i++) {
+        if (i > 0 && i % 4 === 0) result += "-";
+        result += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+    return result;
+}
+
+// 2. Hasht den Key für den Server (SHA-256) -> RoomID
+async function hashRendezvousKey(key) {
+    const encoder = new TextEncoder();
+    const data = encoder.encode(key);
+    const hashBuffer = await crypto.subtle.digest('SHA-256', data);
+    return Array.from(new Uint8Array(hashBuffer))
+        .map(b => b.toString(16).padStart(2, '0'))
+        .join('');
 }
 
 // =============================================================================
@@ -1397,6 +1436,80 @@ async function handleInput(text) {
             }
         }
 
+        else if (cmd === '/rendezvous') {
+            const sub = args[1];
+
+            // A) CREATE (Einen Key erstellen und Partner vorschlagen)
+            if (sub === 'create') {
+                const currentChat = myChats[activeChatId];
+
+                // 1. Private Chat Logic
+                if (currentChat && currentChat.type === 'private') {
+                    printLine("Proposing secure rendezvous point to partner...", "system-msg");
+                    // Wir generieren den Key LOKAL, senden ihn aber NOCH NICHT.
+                    // Wir fragen erst an.
+                    socket.emit('rendezvous_propose_req', { targetKey: activeChatId });
+                }
+                // 2. Group Chat Logic (Nur Owner/Mod)
+                else if (currentChat && currentChat.type === 'group') {
+                    // Generiere Key sofort
+                    const key = generateReadableKey();
+                    // Sende an Server zur Verteilung (verschlüsselt via Group Chat wäre besser,
+                    // aber hier senden wir ihn als System-Event an die Gruppe)
+                    socket.emit('rendezvous_group_create', { groupId: activeChatId, key: key });
+                }
+                else {
+                    printLine("ERROR: You must be in a Private or Group chat to create a rendezvous.", "error-msg");
+                }
+            }
+
+            // B) ENTER (Wiederkommen und Key einlösen)
+            else if (sub === 'enter') {
+                const key = args[2];
+                if (!key) {
+                    printLine("USAGE: /rendezvous enter [XXXX-XXXX-XXXX-XXXX]", "error-msg");
+                    return;
+                }
+
+                printLine("Calculations vectoring... Hashing key...", "system-msg");
+
+                // 1. Hash berechnen (Room ID)
+                const roomHash = await hashRendezvousKey(key);
+
+                // 2. Server anfunken
+                // WICHTIG: Wir senden nur den Hash! Niemals den Key!
+                socket.emit('rendezvous_enter_req', { hash: roomHash });
+
+                // 3. Key temporär speichern für die spätere Verschlüsselung
+                window.tempRendezvousKey = key;
+
+                // 4. UI Update
+                appState = 'RENDEZVOUS_WAITING';
+
+                // Screen leeren & Radar zeigen
+                const output = document.getElementById('output');
+                output.innerHTML = '';
+
+                const waitHtml = `
+                    <div style="text-align:center; margin-top:50px;">
+                        <h1 style="color:var(--accent-color); text-shadow:0 0 10px var(--accent-color);">SCANNING FREQUENCY</h1>
+                        <div style="font-family:monospace; margin:20px 0; color:#fff;">Target Hash: ${roomHash.substring(0, 16)}...</div>
+                        <div class="loader" style="margin: 0 auto;"></div>
+                        <p style="color:#666; margin-top:20px;">Waiting for partner signal match...</p>
+                        <button class="voice-btn danger" onclick="location.reload()">[ ABORT SIGNAL ]</button>
+                    </div>
+                `;
+                // (Optional: CSS für .loader hinzufügen, sonst Text nutzen)
+                const div = document.createElement('div');
+                div.innerHTML = waitHtml;
+                output.appendChild(div);
+            }
+
+            else {
+                printLine("USAGE: /rendezvous [create | enter]", "error-msg");
+            }
+        }
+
         else if (cmd === '/auth') {
             const param = args[1]; // Das Argument nach /auth
 
@@ -2278,6 +2391,15 @@ socket.on('message', async (data) => {
 
     console.log("CLIENT DEBUG: Chat gefunden! Entschlüssele...");
     const clearText = await decryptMessage(data.text, chat.key);
+
+    // --- RENDEZVOUS KEY DETECTOR ---
+    if (clearText.startsWith(':::RENDEZVOUS_KEY:::')) {
+        const realKey = clearText.split(':::')[2];
+        showRendezvousKey(realKey); // Zeigt die fette rote Box an
+        return; // Nachricht NICHT als normalen Text anzeigen
+    }
+    // -------------------------------
+
     const safeText = clearText.replace(/</g, "&lt;").replace(/>/g, "&gt;");
     printToChat(chat.id, `[${getDynamicName(data.user, data.senderKey)}]: ${clearText}`, 'partner-msg');
 });
@@ -4770,6 +4892,142 @@ async function deriveSharedGroupKey(seedString) {
     );
 }
 
+// --- RENDEZVOUS EVENTS ---
+
+// 1. ANFRAGE ERHALTEN (Private Chat)
+socket.on('rendezvous_proposal_rcv', (data) => {
+    // data: { senderKey, senderName }
+
+    // Popup oder In-Chat Nachricht
+    const target = activeChatId === data.senderKey ? activeChatId : 'LOCAL';
+
+    const html = `
+        <div style="border: 2px solid #ffff00; padding: 15px; background: rgba(50,50,0,0.2); margin: 10px 0;">
+            <div style="color:#ffff00; font-weight:bold;">⚠️ SECURE REENTRY PROPOSAL</div>
+            <div style="color:#ccc; margin: 5px 0;">User ${data.senderName} wants to generate a Rendezvous Key.</div>
+            <div style="font-size:0.8em; color:#888;">This allows you both to find each other again later with new identities.</div>
+            <div style="margin-top:10px; text-align:right;">
+                <button class="voice-btn" style="border-color:#0f0; color:#0f0;" onclick="socket.emit('rendezvous_proposal_response', { accepted: true, targetKey: '${data.senderKey}' })">[ ACCEPT ]</button>
+                <button class="voice-btn" style="border-color:#f00; color:#f00;" onclick="socket.emit('rendezvous_proposal_response', { accepted: false, targetKey: '${data.senderKey}' })">[ REJECT ]</button>
+            </div>
+        </div>
+    `;
+    printToChat(target, html, '');
+});
+
+// 2. KEY WIRD GENERIERT & ANGEZEIGT (Nach Zustimmung)
+socket.on('rendezvous_key_reveal', (data) => {
+    // data: { key (falls Initiator), OR triggered by approval }
+
+    // Wenn ich der Initiator war, muss ich den Key jetzt generieren und senden?
+    // BESSER: Der Initiator generiert ihn JETZT und sendet ihn verschlüsselt durch den Tunnel.
+
+    // Aber für den MVP machen wir es einfacher:
+    // Der Server sagt "OK, Proposal accepted".
+    // Der Initiator (Client A) generiert den Key und sendet ihn per 'message' (verschlüsselt)
+    // als speziellen System-Text an Client B.
+
+    // Fall: Ich bin der Initiator und habe das 'accepted' Signal bekommen
+    if (data.isInitiator) {
+        const key = generateReadableKey();
+
+        // Anzeigen für MICH
+        showRendezvousKey(key);
+
+        // Senden an PARTNER (Verschlüsselt über den Chat!)
+        // Wir nutzen einen speziellen Prefix, damit der Client drüben es erkennt
+        const hiddenPayload = `:::RENDEZVOUS_KEY:::${key}`;
+        handleInput(hiddenPayload); // Sendet es wie eine normale Nachricht
+    }
+});
+
+// 3. KEY EMPFANGEN (Via Chat Nachricht)
+// Wir müssen den 'message' Handler leicht anpassen, um den Prefix zu erkennen.
+// Siehe Schritt 4 unten.
+
+// Hilfsfunktion zum Anzeigen des Keys
+function showRendezvousKey(key) {
+    const html = `
+        <div style="border: 2px dashed #f00; background: #000; padding: 20px; text-align: center; margin: 20px 0;">
+            <h2 style="color:#f00; margin:0;">SECRET RENDEZVOUS KEY</h2>
+            <p style="color:#666; font-size:0.8em;">SAVE THIS LOCALLY. IT WILL NOT BE SHOWN AGAIN.</p>
+            <div style="font-family:monospace; font-size:1.5em; color:#fff; margin: 15px 0; letter-spacing: 2px; user-select:all; cursor:pointer;" onclick="navigator.clipboard.writeText('${key}')" title="Click to Copy">
+                ${key}
+            </div>
+            <p style="color:#444; font-size:0.8em;">To reunite: Login with new account -> /rendezvous enter [KEY]</p>
+        </div>
+    `;
+    printToChat(activeChatId, html, '');
+}
+
+// 4. ERFOLGREICH GEFUNDEN (Nach /rendezvous enter)
+socket.on('rendezvous_match_found', async (data) => {
+    // data: { peerSocketId, isCreator (wer zuerst da war), type: 'private' }
+
+    // Bildschirm aufräumen
+    const output = document.getElementById('output');
+    output.innerHTML = '';
+
+    printLine(">>> SIGNAL MATCHED. ESTABLISHING UPLINK...", "success-msg");
+
+    if (data.type === 'private') {
+        // P2P Handshake starten
+        // Da wir keinen "Public Key" des anderen haben (neue Identität!), müssen wir einen neuen Exchange machen.
+        // Der Server hat uns verbunden. Jetzt verhalten wir uns wie bei /connect.
+
+        if (data.role === 'initiator') {
+            // Ich bin der Erste/Initiator der Verbindung -> Ich sende Offer
+            printLine("Initiating Key Exchange with Target...", "system-msg");
+
+            // Normale Connect Logik
+            const ephemeralKeyPair = await generateKeyPair();
+            const pubKeyPem = await exportPublicKey(ephemeralKeyPair.publicKey);
+
+            // Speichern
+            outgoingConnects[data.peerSocketId] = {
+                privateKey: ephemeralKeyPair.privateKey,
+                publicKeyString: pubKeyPem
+            };
+
+            // Via Server an den anderen senden (der Server muss das weiterleiten an den Socket)
+            socket.emit('rendezvous_handshake_init', {
+                targetSocketId: data.peerSocketId,
+                publicKey: pubKeyPem
+            });
+        }
+        else {
+            printLine("Waiting for secure handshake...", "system-msg");
+        }
+    }
+
+    appState = 'IDLE'; // Zurücksetzen
+});
+
+// GROUP RESTORE SUCCESS
+socket.on('rendezvous_group_restored', async (data) => {
+    // data: { groupId, name, role, key (encrypted?) }
+
+    // Da wir den Key schon haben (wir haben ihn ja eingegeben),
+    // müssen wir hier nur den Chat registrieren.
+    // Der Gruppen-Key für die Verschlüsselung muss aus dem Rendezvous-Key abgeleitet werden!
+
+    if (window.tempRendezvousKey) {
+        // Wir leiten den Encryption Key vom Rendezvous Key ab
+        // Das garantiert, dass nur Inhaber des Keys lesen können
+        const groupCryptoKey = await deriveSharedGroupKey(window.tempRendezvousKey);
+
+        registerChat(data.groupId, data.name, 'group', groupCryptoKey, data.role);
+
+        // Direkt rein
+        switchChat(data.groupId, true);
+
+        printLine(`>>> SLEEPER CELL ACTIVATED: ${data.name}`, "success-msg");
+        printLine(`>>> YOUR STATUS: ${data.role}`, "system-msg");
+
+        window.tempRendezvousKey = null; // Löschen aus RAM
+    }
+});
+
 // =============================================================================
 // AUTOCOMPLETE SYSTEM (Discord-Style)
 // =============================================================================
@@ -5918,7 +6176,21 @@ let currentRightTab = 'PROMO'; // 'PROMO' oder 'NEWS'
 
 // 1. HAUPTFENSTER UMSCHALTEN (MASTER NAVIGATOR)
 window.switchMainView = (mode) => {
-    // Verhindert unnötiges Neuladen, außer wir wollen CHAT erzwingen
+
+    // --- SECURITY LOCK ---
+    // Wenn das System noch bootet, darf man nirgendwo hin wechseln!
+    if (appState === 'BOOTING' && mode !== 'CHAT') {
+        const output = document.getElementById('output');
+        const div = document.createElement('div');
+        div.className = 'line error-msg';
+        div.textContent = '>> ACCESS DENIED: PLEASE IDENTIFY FIRST.';
+        output.appendChild(div);
+        output.scrollTop = output.scrollHeight;
+        document.getElementById('command-input').focus();
+        return;
+    }
+
+    // Verhindert unnötiges Neuladen, außer bei CHAT
     if (viewMode === mode && mode !== 'CHAT') return;
 
     viewMode = mode;
@@ -5926,16 +6198,17 @@ window.switchMainView = (mode) => {
     // --- ELEMENTE REFERENZIEREN ---
     const chatOutput = document.getElementById('output');
     const wireView = document.getElementById('wire-view');
+    const manualView = document.getElementById('manual-view'); // NEU
+
     const drawer = document.getElementById('sub-nav-drawer');
     const inputField = document.getElementById('command-input');
     const promptSpan = document.getElementById('prompt');
-    const logsBtn = document.getElementById('btn-mode-logs'); // Referenz für Reset
+    const logsBtn = document.getElementById('btn-mode-logs');
 
     // --- GLOBALE RESETS ---
-    // 1. Buttons zurücksetzen
     document.querySelectorAll('.control-btn').forEach(b => b.classList.remove('active'));
 
-    // 2. Drawer (Wire Button) verstecken
+    // Drawer schließen (außer bei Wire)
     if (drawer) {
         if (mode === 'WIRE') drawer.classList.add('visible');
         else drawer.classList.remove('visible');
@@ -5947,15 +6220,14 @@ window.switchMainView = (mode) => {
     if (mode === 'CHAT') {
         document.getElementById('btn-mode-chat').classList.add('active');
 
-        // 1. Container sichtbar machen & REST VERSTECKEN
+        // Sichtbarkeit umschalten
         wireView.style.display = 'none';
+        manualView.style.display = 'none'; // NEU
         chatOutput.style.display = 'block';
 
-        // 2. HARD RESET: Bildschirm sofort leeren!
-        // Das garantiert, dass die Logs visuell verschwinden.
         chatOutput.innerHTML = '';
 
-        // 3. Input Reset (Inline, damit keine Funktion fehlt)
+        // Input Reset
         inputField.value = '';
         inputField.disabled = false;
         inputField.placeholder = "";
@@ -5963,11 +6235,8 @@ window.switchMainView = (mode) => {
         promptSpan.className = 'prompt-default';
         promptSpan.style.color = '';
 
-        // Falls der Logs-Button rot war, normalisieren
         if (logsBtn) logsBtn.classList.remove('danger');
 
-        // 4. Chat laden (Erzwingen!)
-        // Wir prüfen, ob activeChatId gültig ist, sonst nehmen wir LOCAL
         if (!activeChatId || !myChats[activeChatId]) activeChatId = 'LOCAL';
 
         switchChat(activeChatId, true);
@@ -5978,7 +6247,8 @@ window.switchMainView = (mode) => {
         document.getElementById('btn-mode-wire').classList.add('active');
 
         chatOutput.style.display = 'none';
-        wireView.style.display = 'flex'; // Flexbox für Wire!
+        manualView.style.display = 'none'; // NEU
+        wireView.style.display = 'flex';
 
         socket.emit('wire_load_req');
 
@@ -5996,6 +6266,7 @@ window.switchMainView = (mode) => {
 
         chatOutput.style.display = 'block';
         wireView.style.display = 'none';
+        manualView.style.display = 'none'; // NEU
 
         inputField.value = '';
         inputField.placeholder = "SEARCH ARCHIVES...";
@@ -6009,7 +6280,23 @@ window.switchMainView = (mode) => {
         socket.emit('blog_list_req');
     }
 
-    // Voice Panel nur im Chat zeigen
+    // D) MANUAL MODUS (NEU)
+    else if (mode === 'MANUAL') {
+        document.getElementById('btn-mode-manual').classList.add('active');
+
+        chatOutput.style.display = 'none';
+        wireView.style.display = 'none';
+        manualView.style.display = 'block'; // Anzeigen
+
+        inputField.value = '';
+        inputField.placeholder = "TYPE /help FOR QUICK LIST...";
+        inputField.focus();
+
+        promptSpan.textContent = 'MANUAL>';
+        promptSpan.className = 'prompt-default';
+        promptSpan.style.color = '#00ffff'; // Helles Cyan für Hilfe
+    }
+
     if (typeof updateVoicePanelVisibility === 'function') {
         updateVoicePanelVisibility();
     }

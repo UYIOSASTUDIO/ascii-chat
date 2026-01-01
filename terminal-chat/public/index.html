@@ -105,6 +105,45 @@
             </div>
         </div>
 
+        <div id="manual-view" style="display: none;">
+            <div class="manual-content">
+                <h1>/// SYSTEM OPERATOR MANUAL ///</h1>
+                <p class="manual-intro">Welcome to the decentralized terminal uplink. Below is a list of protocols to navigate the network.</p>
+
+                <div class="manual-section">
+                    <h2>01. CORE COMMANDS</h2>
+                    <div class="cmd-row"><span class="cmd">/connect [ID]</span> <span class="desc">Establishes a P2P encrypted tunnel to a user.</span></div>
+                    <div class="cmd-row"><span class="cmd">/accept [ID]</span> <span class="desc">Accept incoming handshake request.</span></div>
+                    <div class="cmd-row"><span class="cmd">/leave</span> <span class="desc">Terminates current session or leaves group.</span></div>
+                    <div class="cmd-row"><span class="cmd">/ghost</span> <span class="desc">Toggles visibility (Stealth Mode).</span></div>
+                </div>
+
+                <div class="manual-section">
+                    <h2>02. GROUP OPERATIONS</h2>
+                    <div class="cmd-row"><span class="cmd">/group create [NAME]</span> <span class="desc">Initialize a new secure cluster.</span></div>
+                    <div class="cmd-row"><span class="cmd">/group invite [ID]</span> <span class="desc">Grant access to a specific node.</span></div>
+                    <div class="cmd-row"><span class="cmd">/group link</span> <span class="desc">Generate a one-time entry key.</span></div>
+                </div>
+
+                <div class="manual-section">
+                    <h2>03. THE WIRE (BROADCAST)</h2>
+                    <p>The Wire is a public, anonymous frequency. Use the 📡 button to access.</p>
+                    <div class="cmd-row"><span class="cmd">TAGS</span> <span class="desc">Use #tags to categorize intel.</span></div>
+                    <div class="cmd-row"><span class="cmd">FUEL</span> <span class="desc">Posts expire. Fuel them to keep them alive.</span></div>
+                </div>
+
+                <div class="manual-section">
+                    <h2>04. SECURITY LEVELS</h2>
+                    <div class="cmd-row"><span class="cmd">P-256 ECC</span> <span class="desc">Default encryption for all direct messages.</span></div>
+                    <div class="cmd-row"><span class="cmd">GHOST PROTOCOL</span> <span class="desc">Hides your ID from public scans.</span></div>
+                </div>
+
+                <div style="margin-top: 40px; text-align: center; color: #444;">
+                    -- END OF FILE --
+                </div>
+            </div>
+        </div>
+
         <div class="input-area">
             <div id="autocomplete-list" class="autocomplete-items"></div>
 
@@ -129,6 +168,7 @@
                 <div class="control-btn" id="btn-mode-wire" onclick="switchMainView('WIRE')" title="The Wire">📡</div>
                 <div class="control-btn" id="btn-mode-logs" onclick="switchMainView('BLOG')" title="System Archives">📄</div>
                 <div class="control-btn" id="btn-mode-files" onclick="openFileSystem()" title="Secure File Transfer">📁</div>
+                <div class="control-btn" id="btn-mode-manual" onclick="switchMainView('MANUAL')" title="Operator Manual">❓</div>
             </div>
 
             <div id="sub-nav-drawer" class="sub-nav-drawer">

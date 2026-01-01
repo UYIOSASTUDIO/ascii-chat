@@ -105,6 +105,17 @@ function serverError(msg) {
     console.error(`[ERROR ${time}] ⚠️ ${msg}`);
 }
 
+
+// --- RENDEZVOUS SYSTEM MEMORY ---
+const rendezvousWaiting = {}; // Speichert: { HASH: { socketId, timestamp } }
+const rendezvousGroups = {};  // Speichert: { HASH: { groupId, groupName, savedRoleData... } }
+
+// Helper zum Hashen auf dem Server (für Group Create)
+async function serverHash(key) {
+    // Da wir Node.js nutzen, nehmen wir das crypto Modul direkt
+    return crypto.createHash('sha256').update(key).digest('hex');
+}
+
 // SECURITY HEADERS (Content Security Policy)
 // Wir erlauben hier explizit Google Fonts und Flaticon Images
 app.use((req, res, next) => {
@@ -250,23 +261,26 @@ io.on('connection', (socket) => {
     // --- FILE SYSTEM AUTHENTIFIZIERUNG ---
 // --- LOGIN HANDLER (FILE SYSTEM) ---
     socket.on('fs_login', (data) => {
-        socket.username = escapeHtml(data.username || 'Anonymous'); // XSS Schutz auch hier
-        // Wir nehmen den User aus der Haupt-Liste, falls er eingeloggt ist
-        const mainUser = Object.values(users).find(u => u.username === socket.username);
+        // Sicherstellen, dass username ein String ist
+        const rawName = (data && data.username) ? String(data.username) : 'Anonymous';
+        socket.username = escapeHtml(rawName);
 
         console.log(`[LOGIN] FS User: ${socket.username} (ID: ${socket.id})`);
 
         // VALIDIERUNG: Gruppen beitreten
-        if (data.groups && Array.isArray(data.groups)) {
+        if (data && data.groups && Array.isArray(data.groups)) {
             data.groups.forEach(roomName => {
-                // roomName ist z.B. "group_1234" oder "pub_0001"
+
+                // --- DER FIX: TYP PRÜFEN ---
+                if (typeof roomName !== 'string') return; // Überspringen, wenn kein String!
+                // ---------------------------
 
                 // 1. Ist es eine Private Gruppe?
                 if (roomName.startsWith('group_')) {
                     const groupId = roomName.replace('group_', '');
                     const group = privateGroups[groupId];
 
-                    // PRAGMATISCHE LÖSUNG: Wir prüfen, ob es einen Haupt-User mit diesem Namen gibt, der in der Gruppe ist.
+                    // Prüfen, ob User berechtigt ist (Name-Match als einfacher Check)
                     const isLegitMember = group && group.members.some(memberSocketId => {
                         const u = users[memberSocketId];
                         return u && u.username === socket.username;
@@ -274,12 +288,11 @@ io.on('connection', (socket) => {
 
                     if (isLegitMember) {
                         socket.join(roomName);
-                        // console.log(`   -> Re-joined Room: ${roomName} (Authorized)`);
                     } else {
-                        console.log(`   -> BLOCKED join attempt to ${roomName} (Unauthorized)`);
+                        // console.log(`   -> BLOCKED join attempt to ${roomName}`);
                     }
                 }
-                // 2. Public Rooms sind okay (da eh public)
+                // 2. Public Rooms sind okay
                 else if (roomName.startsWith('pub_')) {
                     socket.join(roomName);
                 }
@@ -3534,6 +3547,210 @@ io.on('connection', (socket) => {
         }
     });
 
+    // =================================================================
+    // RENDEZVOUS SYSTEM (ZERO KNOWLEDGE RE-ENTRY)
+    // =================================================================
+
+    // A) PRIVATE CHAT: VORSCHLAG SENDEN
+    socket.on('rendezvous_propose_req', (data) => {
+        const user = users[socket.id];
+        // data.targetKey ist der User-Key des Partners
+        const targetUser = Object.values(users).find(u => u.key === data.targetKey);
+
+        if (targetUser && user.partners.includes(targetUser.id)) {
+            io.to(targetUser.id).emit('rendezvous_proposal_rcv', {
+                senderKey: user.key,
+                senderName: user.isGhost ? 'Anonymous' : user.username
+            });
+        }
+    });
+
+    // B) PRIVATE CHAT: VORSCHLAG ANTWORT
+    socket.on('rendezvous_proposal_response', (data) => {
+        const user = users[socket.id];
+        const targetUser = Object.values(users).find(u => u.key === data.targetKey);
+
+        if (targetUser) {
+            if (data.accepted) {
+                // Beide bekommen das Signal zum Generieren/Anzeigen
+                // Wir sagen dem Initiator (Target), dass er loslegen darf
+                io.to(targetUser.id).emit('rendezvous_key_reveal', { isInitiator: true });
+                // Dem Akzeptierer sagen wir nur "Accepted" (er wartet auf den Key im Chat)
+                socket.emit('system_message', 'Rendezvous protocols accepted. Waiting for secure key transmission...');
+            } else {
+                io.to(targetUser.id).emit('system_message', 'Rendezvous proposal rejected by partner.');
+            }
+        }
+    });
+
+    // C) GROUP CHAT: KEY REGISTRIEREN
+    socket.on('rendezvous_group_create', async (data) => {
+        // data: { groupId, key } -> Key ist im Klartext vom Client
+        const user = users[socket.id];
+        const group = privateGroups[data.groupId];
+
+        if (!user || !group) return;
+        if (group.ownerId !== socket.id && !group.mods.includes(socket.id)) return; // Nur Owner/Mod
+
+        // 1. Key Hashen (Der Server speichert NUR den Hash!)
+        const hash = await serverHash(data.key);
+
+        // 2. Mapping speichern
+        rendezvousGroups[hash] = {
+            groupId: group.id,
+            groupName: group.name, // Wichtig für Wiederherstellung
+            created: Date.now()
+        };
+
+        // 3. Bestätigung an die Gruppe
+        const role = group.ownerId === socket.id ? 'OWNER' : 'MOD';
+        io.to(`group_${group.id}`).emit('group_broadcast_received', {
+            text: `:::RENDEZVOUS_KEY:::${data.key}`, // Der magische String für den Client
+            senderName: user.username,
+            senderKey: user.key,
+            isGhost: !!user.isGhost,
+            role: role,
+            groupId: group.id
+        });
+
+        serverLog(`Rendezvous Point erstellt für Gruppe ${group.id} (Hash: ${hash.substring(0,8)}...)`);
+    });
+
+    // D) ENTER RENDEZVOUS (DER KERN)
+    socket.on('rendezvous_enter_req', (data) => {
+        const user = users[socket.id];
+        const hash = data.hash;
+
+        if (!user || !hash) return;
+
+        console.log(`[RENDEZVOUS] User ${user.username} scannt Hash: ${hash.substring(0, 10)}...`);
+
+        // --- CHECK 1: IST ES EINE GRUPPE? ---
+        if (rendezvousGroups[hash]) {
+            const rGroup = rendezvousGroups[hash];
+            let group = privateGroups[rGroup.groupId];
+            let role = 'MEMBER';
+
+            // FALL 1: Gruppe existiert noch
+            if (group) {
+                // Einfach joinen
+                if (!group.members.includes(socket.id)) {
+                    group.members.push(socket.id);
+                    socket.join(`group_${group.id}`);
+                    user.currentGroup = group.id;
+                }
+            }
+            // FALL 2: Gruppe war gelöscht ("Sleeper Cell")
+            else {
+                // Wir erwecken sie wieder zum Leben!
+                serverLog(`[RENDEZVOUS] Sleeper Cell ${rGroup.groupName} aktiviert von ${user.username}`);
+
+                // Gruppe neu erstellen im RAM
+                privateGroups[rGroup.groupId] = {
+                    id: rGroup.groupId,
+                    name: rGroup.groupName,
+                    ownerId: socket.id, // Der Erste wird OWNER!
+                    members: [socket.id],
+                    mods: [],
+                    key: "RESTORED_" + Date.now(), // Neuer interner Key
+                    pendingJoins: [],
+                    invitedUsers: [],
+                    isPublic: false
+                };
+                group = privateGroups[rGroup.groupId];
+                role = 'OWNER'; // Belohnung fürs Wecken
+
+                socket.join(`group_${group.id}`);
+                user.currentGroup = group.id;
+            }
+
+            // Erfolg an Client senden
+            socket.emit('rendezvous_group_restored', {
+                groupId: group.id,
+                name: group.name,
+                role: role
+            });
+
+            // Status an Gruppe
+            io.to(`group_${group.id}`).emit('room_user_status', {
+                username: user.username,
+                key: user.key,
+                isGhost: !!user.isGhost,
+                type: 'join',
+                context: 'group',
+                roomId: group.id
+            });
+
+            // WICHTIG: Damit wir nicht weiter nach Private Chats suchen
+            return;
+        }
+
+        // --- CHECK 2: IST ES EIN PRIVATE CHAT? (P2P) ---
+
+        // Ist schon jemand da?
+        if (rendezvousWaiting[hash]) {
+            const waiter = rendezvousWaiting[hash];
+
+            // Sicherheitscheck: Ist der Wartende noch online?
+            const waiterSocket = io.sockets.sockets.get(waiter.socketId);
+
+            if (waiterSocket) {
+                // MATCH FOUND!
+                serverLog(`[RENDEZVOUS] Match found: ${user.username} <-> Waiting Socket`);
+
+                // 1. An den NEUEN (Mich): "Du bist der Peer"
+                socket.emit('rendezvous_match_found', {
+                    peerSocketId: waiter.socketId,
+                    role: 'peer',
+                    type: 'private'
+                });
+
+                // 2. An den WARTENDEN: "Du bist der Initiator"
+                waiterSocket.emit('rendezvous_match_found', {
+                    peerSocketId: socket.id,
+                    role: 'initiator',
+                    type: 'private'
+                });
+
+                // Warteraum leeren
+                delete rendezvousWaiting[hash];
+            } else {
+                // Wartender ist weg -> Überschreiben
+                rendezvousWaiting[hash] = { socketId: socket.id, timestamp: Date.now() };
+            }
+        } else {
+            // Niemand da -> Ich warte
+            rendezvousWaiting[hash] = { socketId: socket.id, timestamp: Date.now() };
+            // (Client zeigt schon Radar Animation an)
+        }
+    });
+
+    // E) P2P HANDSHAKE TUNNEL
+    socket.on('rendezvous_handshake_init', (data) => {
+        // data: { targetSocketId, publicKey }
+
+        // Wir leiten das einfach als normalen Request weiter,
+        // aber der Client empfängt es als 'incoming_request',
+        // welches er automatisch akzeptieren wird (da er im Warte-Modus war?
+        // Nein, Client Logic muss das handhaben, oder wir triggern ein normales connect)
+
+        // Wir nutzen den existierenden 'incoming_request' Kanal,
+        // da der Client dort schon die Logik hat.
+
+        const sender = users[socket.id];
+
+        io.to(data.targetSocketId).emit('incoming_request', {
+            requesterId: socket.id,
+            requesterName: sender.isGhost ? 'Anonymous' : sender.username,
+            requesterKey: sender.key,
+            publicKey: data.publicKey
+        });
+
+        // Der Trick: Da der User A gerade "CONNECTING" sieht, muss er manuell annehmen?
+        // Besser: Wir vertrauen darauf, dass der User "Accept" drückt, da er ja drauf wartet.
+        // Oder wir erweitern den Client, dass er bei Rendezvous-Matches automatisch annimmt.
+    });
+
     // --- DISCONNECT HANDLING ---
     socket.on('disconnect', () => {
         // 1. User identifizieren
@@ -3632,6 +3849,15 @@ io.on('connection', (socket) => {
 
                     // Promo-Board aktualisieren
                     io.emit('promo_update', generatePromoList());
+                }
+            }
+
+            // --- RENDEZVOUS CLEANUP ---
+            // Prüfen, ob dieser Socket in einem Warteraum sitzt
+            for (const [hash, waiter] of Object.entries(rendezvousWaiting)) {
+                if (waiter.socketId === socket.id) {
+                    delete rendezvousWaiting[hash];
+                    // console.log(`[RENDEZVOUS] Waiting signal lost for hash ${hash.substr(0,5)}...`);
                 }
             }
 
