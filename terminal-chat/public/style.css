@@ -1211,7 +1211,7 @@ input:checked + .slider:before { transform: translateX(20px); background-color: 
     backdrop-filter: blur(10px); /* Blur-Effekt für den Hintergrund */
     border-top: 1px solid var(--accent-color);
     box-shadow: 0 -5px 20px rgba(0, 0, 0, 0.8);
-    z-index: 50; /* Über dem Feed, aber unter Popups */
+    z-index: 200; /* Über dem Feed, aber unter Popups */
 
     display: flex;
     flex-direction: column;
