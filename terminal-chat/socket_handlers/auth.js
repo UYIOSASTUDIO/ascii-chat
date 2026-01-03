@@ -662,12 +662,8 @@ module.exports = (io, socket, state) => {
             socket.join(internalRoom);
             serverLog(`[INTERNAL] ${state.users[socket.id].username} joined channel ${internalRoom}`);
 
-            // Inbox laden
-            let inbox = [];
-            const inboxPath = path.join(DATA_DIR, inst.inbox_file);
-            if (fs.existsSync(inboxPath)) {
-                try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
-            }
+            // Inbox aus DB laden
+            const inbox = await db.getInboxMessages(inst.tag);
 
             const tempPrivKey = inst.keys ? inst.keys.priv : "";
 

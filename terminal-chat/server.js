@@ -44,6 +44,77 @@ const io = new Server(server, {
     maxHttpBufferSize: 1e8 // 100 MB Upload Limit
 });
 
+// server.js
+
+// --- AI-SCRAPER BLOCKER (Robots.txt) ---
+// Das Schild "Betreten verboten" für KI-Crawler
+app.get('/robots.txt', (req, res) => {
+    res.type('text/plain');
+    res.send(`
+# --- OpenAI (ChatGPT) ---
+User-agent: GPTBot
+Disallow: /
+
+User-agent: ChatGPT-User
+Disallow: /
+
+# --- Google (Gemini / Vertex AI) ---
+# Google-Extended blockiert das Training für Gemini
+User-agent: Google-Extended
+Disallow: /
+
+# --- Anthropic (Claude) ---
+User-agent: ClaudeBot
+Disallow: /
+
+User-agent: anthropic-ai
+Disallow: /
+
+# --- Perplexity AI (Sehr aggressiver Crawler) ---
+User-agent: PerplexityBot
+Disallow: /
+
+# --- Apple (Apple Intelligence) ---
+User-agent: Applebot-Extended
+Disallow: /
+
+# --- Common Crawl (Trainingsdaten für viele Modelle) ---
+User-agent: CCBot
+Disallow: /
+
+# --- Meta (Facebook / Llama) ---
+User-agent: FacebookBot
+Disallow: /
+
+User-agent: FacebookExternalHit
+Disallow: /
+
+# --- Amazon (Titan / Bedrock) ---
+User-agent: Amazonbot
+Disallow: /
+
+# --- ByteDance (TikTok / Doubao) ---
+User-agent: Bytespider
+Disallow: /
+
+# --- Webz.io (Omgili - Füttert viele LLMs) ---
+User-agent: Omgilibot
+Disallow: /
+
+# --- Scrapy & Python Requests (Allgemeine Scraper) ---
+# Blockiert oft einfache Skripte
+User-agent: Scrapy
+Disallow: /
+
+# --- Fallback für alle anderen "braven" Bots ---
+# (Wenn du NICHT bei Google gefunden werden willst, lass das so.
+# Wenn du bei Google Search gefunden werden willst, aber NICHT für AI,
+# ändere dies zu 'Allow: /' und verlasse dich auf die oberen Blocks.)
+User-agent: *
+Allow: /
+    `.trim());
+});
+
 app.use(express.static(path.join(__dirname, 'public')));
 
 // --- INTERVALL JOBS ---

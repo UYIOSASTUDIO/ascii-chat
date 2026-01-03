@@ -20,6 +20,141 @@ const chatList = document.getElementById('chat-list');
 // --- GLOBAL VARIABLES ---
 const socket = io();
 
+// public/client.js
+
+// Das ASCII Logo als konstanter String
+const EKLAT_LOGO = `
+███████╗██╗  ██╗██╗      █████╗ ████████╗
+██╔════╝██║ ██╔╝██║     ██╔══██╗╚══██╔══╝
+█████╗  █████╔╝ ██║     ███████║   ██║   
+██╔══╝  ██║─██╗ ██║     ██╔══██║   ██║   
+███████╗██║  ██╗███████╗██║  ██║   ██║   
+╚══════╝╚═╝  ╚═╝╚══════╝╚═╝  ╚═╝   ╚═╝   
+`;
+
+// Hilfsfunktion zum Ändern des Prompts
+function setPromptMode(mode) {
+    // WICHTIG: Wir nutzen die ID 'prompt', weil sie so in deiner HTML steht
+    const promptEl = document.getElementById('prompt');
+    if (!promptEl) return;
+
+    if (mode === 'AUTH') {
+        promptEl.textContent = "identify >";
+        // Wir nutzen 'prompt-error', weil das in deiner style.css bereits ROT definiert ist
+        promptEl.className = "prompt-error";
+    } else {
+        promptEl.textContent = ">";
+        // Wir nutzen 'prompt-default', weil das in deiner style.css bereits GRÜN definiert ist
+        promptEl.className = "prompt-default";
+    }
+}
+
+function runBootSequence() {
+    const output = document.getElementById('output');
+
+    // Wir holen uns die Elemente
+    const inputArea = document.getElementById('input-area'); // Der Container
+    const inputField = document.getElementById('command-input'); // Das Textfeld
+
+    // SICHERHEIT: Input während Boot deaktiviert lassen (falls HTML Änderung vergessen wurde)
+    if (inputArea) inputArea.classList.add('hidden-boot');
+    if (inputField) inputField.disabled = true;
+
+    // 2. Logo rendern
+    const logoDiv = document.createElement('div');
+    logoDiv.className = 'ascii-logo';
+    logoDiv.textContent = EKLAT_LOGO;
+    output.appendChild(logoDiv);
+
+    // 3. Loading Bar Container erstellen
+    const barDiv = document.createElement('div');
+    barDiv.className = 'loading-bar-container';
+    output.appendChild(barDiv);
+
+    // Auto-Scroll
+    output.scrollTop = output.scrollHeight;
+
+    // 4. Animation
+    let progress = 0;
+    const totalSteps = 25;
+    const duration = 2000;
+    const intervalTime = duration / totalSteps;
+
+    const interval = setInterval(() => {
+        progress++;
+
+        const percent = Math.round((progress / totalSteps) * 100);
+        const filled = '█'.repeat(progress);
+        const empty = '▒'.repeat(totalSteps - progress);
+
+        let sysMsg = "LOADING KERNEL...";
+        if (percent > 30) sysMsg = "MOUNTING SECURE VOLUMES...";
+        if (percent > 60) sysMsg = "DECRYPTING GATEWAYS...";
+        if (percent > 90) sysMsg = "ESTABLISHING UPLINK...";
+
+        // Text updaten
+        barDiv.innerHTML = `
+            <div>SYSTEM BOOT SEQUENCE_</div>
+            <div>${sysMsg}</div>
+            <div>[${filled}${empty}] ${percent}%</div>
+        `;
+
+        output.scrollTop = output.scrollHeight;
+
+        // 5. Fertig?
+        if (progress >= totalSteps) {
+            clearInterval(interval);
+
+            // Finaler Status
+            barDiv.innerHTML = `
+                <div>SYSTEM BOOT SEQUENCE_</div>
+                <div style="color:#0f0">>> SYSTEM READY <<</div>
+                <div>[${filled}] 100%</div>
+            `;
+
+            setTimeout(() => {
+                // --- HIER PASSIERT DIE MAGIE ---
+
+                // 1. Input Bereich sichtbar machen
+                if(inputArea) {
+                    inputArea.classList.remove('hidden-boot'); // CSS Klasse entfernen
+                    inputArea.style.display = 'flex'; // Sicherstellen, dass Flexbox greift
+                }
+
+                // 2. Textfeld aktivieren und Fokus setzen
+                if(inputField) {
+                    inputField.disabled = false; // Tippen erlauben
+                    inputField.focus();          // Cursor reinsetzen
+                    inputField.value = '';       // Sicherstellen, dass es leer ist
+                }
+
+                // 3. Prompt auf Rot stellen (Identify Modus)
+                setPromptMode('AUTH');
+
+                printLine(" ", "");
+                printLine("⚠️ AUTHENTICATION REQUIRED ⚠️", "error-msg");
+                printLine("Please enter your CODENAME to initialize uplink.");
+
+            }, 500);
+        }
+    }, intervalTime);
+}
+
+// Hilfsfunktion für den Output (falls du sie noch nicht hast)
+function printLine(text, className = '') {
+    const output = document.getElementById('output');
+    const line = document.createElement('div');
+    if (className) line.className = className;
+    line.textContent = text;
+    output.appendChild(line);
+    output.scrollTop = output.scrollHeight;
+}
+
+// --- STARTEN BEIM LADEN ---
+window.onload = () => {
+    runBootSequence();
+};
+
 
 // =============================================================================
 // PROTOCOL: SCORCHED EARTH (DATA WIPER)
@@ -403,11 +538,6 @@ function printToChat(chatId, text, className = '') {
     }
 }
 
-// Wrapper für alten Code
-function printLine(text, className = '') {
-    printToChat(activeChatId, text, className);
-}
-
 // Wir fügen 'role' als optionalen Parameter hinzu
 function registerChat(id, name, type, cryptoKey = null, role = 'MEMBER') {
     const safeId = String(id); // WICHTIG: Immer String benutzen!
@@ -698,49 +828,6 @@ function getSystemStats() {
     else if (ua.includes("Safari")) engine = "WEBKIT";
 
     return { os, cores, ramKB, res: `${window.screen.width}x${window.screen.height}`, engine, arch };
-}
-
-async function runBootSequence() {
-    input.disabled = true;
-    promptSpan.className = 'prompt-hidden';
-    const stats = getSystemStats();
-    const now = new Date();
-
-    printLine(`BIOS DATE ${now.toLocaleDateString()} ${now.toLocaleTimeString()} VER 4.02`, 'system-msg');
-    await wait(200);
-    printLine(`DETECTED CPU: GEN-X ${stats.arch} (${stats.cores} LOGICAL CORES) ... OK`, 'system-msg');
-    await wait(100);
-    printLine(`MEMORY CHECK: ${stats.ramKB} KB OK`, 'system-msg');
-    await wait(100);
-    printLine(`VIDEO ADAPTER: GPU INTEGRATED GRAPHICS [${stats.res}] ... OK`, 'system-msg');
-    await wait(200);
-
-    const progressDiv = document.createElement('div');
-    progressDiv.className = 'line system-msg';
-    output.appendChild(progressDiv);
-
-    for (let i = 0; i <= 100; i += 5) {
-        const bars = '#'.repeat(Math.floor(i / 5)).padEnd(20, '.');
-        progressDiv.textContent = `LOADING ${stats.os} KERNEL... [${bars}] ${i}%`;
-        output.scrollTop = output.scrollHeight;
-        await wait(10);
-    }
-
-    progressDiv.textContent = `LOADING ${stats.os} KERNEL... [####################] 100% COMPLETE`;
-    await wait(200);
-    printLine(`MOUNTING VIRTUAL FILESYSTEM (${stats.engine})...`, 'system-msg');
-    await wait(200);
-    printLine('SYSTEM READY.', 'system-msg');
-    printLine(' ', '');
-    printLine('⚠️  AUTHENTICATION REQUIRED  ⚠️', 'error-msg');
-    printLine('Please enter your CODENAME to initialize uplink.', 'my-msg');
-
-    promptSpan.textContent = 'IDENTITY>';
-    promptSpan.className = 'prompt-error';
-    document.getElementById('command-input').placeholder = "Type your identity...";
-    input.disabled = false;
-    input.focus();
-    renderChatList(); // Sidebar initialisieren
 }
 
 // =============================================================================
@@ -6694,6 +6781,4 @@ if (identityInput) {
     });
 }
 
-// --- INIT ---
-runBootSequence();
 updateVoiceUI('idle');

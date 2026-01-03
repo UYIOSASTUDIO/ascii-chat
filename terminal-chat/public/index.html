@@ -3,6 +3,9 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <meta name="robots" content="noindex, nofollow, noimageai, noai">
+    <meta name="googlebot" content="noindex, nofollow">
+    <meta name="gptbot" content="noindex">
     <title>TERMINAL CHAT v1.0</title>
     <link rel="stylesheet" href="style.css">
 </head>
@@ -144,13 +147,13 @@
             </div>
         </div>
 
-        <div class="input-area">
+        <div class="input-area hidden-boot" id="input-area">
             <div id="autocomplete-list" class="autocomplete-items"></div>
 
             <div class="input-wrapper">
                 <span id="prompt" class="prompt">&gt;</span>
                 <div class="input-container">
-                    <textarea id="command-input" rows="1" spellcheck="false" autofocus></textarea>
+                    <textarea id="command-input" rows="1" spellcheck="false" disabled></textarea>
                     <div id="cmd-mirror"></div>
                 </div>
             </div>

@@ -6,6 +6,7 @@ const { serverLog, serverError } = require('../utils/logger');
 const { reorganizePublicRooms, generatePromoList } = require('../utils/room_manager');
 const webpush = require('web-push');
 const state = require("../state");
+const db = require('../database');
 
 // Hilfsfunktion für Push (lokal)
 function sendPush(targetUser, title, content) {
@@ -2660,45 +2661,52 @@ module.exports = (io, socket, state) => {
         }
     });
 
-    // INFORMANT: Tipp senden
-    socket.on('hq_send_tip', async (data) => { // async wichtig!
-        // 1. Institution suchen
+    // INFORMANT: Tipp senden (JETZT VIA DB)
+    socket.on('hq_send_tip', async (data) => {
+        // data: { targetId, content }
         const inst = await db.getInstitutionByTag(data.targetId);
 
         if (!inst) {
-            socket.emit('system_message', 'ERROR: Destination not found. Drop failed.');
+            socket.emit('system_message', 'ERROR: Destination not found.');
             return;
         }
 
-        // 2. User Identität sicher holen
         const senderUser = state.users[socket.id];
         const safeSenderName = senderUser ? senderUser.username : 'Unknown';
+        const senderKey = senderUser ? senderUser.key : 'UNKNOWN';
 
-        // 3. Speichern (in die JSON Datei der Institution)
-        // Wir nutzen inst.inbox_file aus der Datenbank!
-        const inboxPath = path.join(DATA_DIR, inst.inbox_file);
-
-        let inbox = [];
-        if (fs.existsSync(inboxPath)) {
-            try { inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8')); } catch(e){}
-        }
-
-        const msg = {
-            id: Date.now() + '-' + Math.floor(Math.random()*10000),
-            timestamp: Date.now(),
-            content: data.content, // Verschlüsselt
-            senderId: socket.id,   // Wichtig für den Handshake-Button
-            senderName: safeSenderName
-        };
-
-        inbox.push(msg);
-        fs.writeFileSync(inboxPath, JSON.stringify(inbox, null, 2));
+        // 1. In DB speichern
+        await db.addInboxMessage(inst.tag, safeSenderName, senderKey, data.content);
 
         socket.emit('system_message', `>>> INTEL DELIVERED TO ${inst.name}.`);
 
-        // 4. Live Update an das eingeloggte HQ senden
-        // Wir senden an den Raum "HQ_TAG" (z.B. HQ_KGB)
-        io.to(`HQ_${inst.tag}`).emit('hq_inbox_data', inbox);
+        // 2. Live Update an das eingeloggte HQ senden
+        // Wir holen die frische Liste direkt aus der DB
+        const freshInbox = await db.getInboxMessages(inst.tag);
+        io.to(`HQ_${inst.tag}`).emit('hq_inbox_data', freshInbox);
+    });
+
+    // HQ: Nachricht löschen (JETZT VIA DB)
+    socket.on('hq_delete_msg', async (msgId) => {
+        const user = state.users[socket.id];
+        // Security: Ist User eine Institution?
+        if (!user || !user.institution) return;
+
+        // Löschen
+        await db.deleteInboxMessage(msgId);
+
+        // Update senden
+        const freshInbox = await db.getInboxMessages(user.institution.tag);
+        socket.emit('hq_inbox_data', freshInbox);
+    });
+
+    // HQ: Inbox manuell laden
+    socket.on('hq_fetch_inbox', async () => {
+        const user = state.users[socket.id];
+        if (user && user.institution) {
+            const inbox = await db.getInboxMessages(user.institution.tag);
+            socket.emit('hq_inbox_data', inbox);
+        }
     });
 
     // HQ: SICHERER VERBINDUNGSAUFBAU ZUM INFORMANTEN
@@ -2780,36 +2788,6 @@ module.exports = (io, socket, state) => {
             tag: user.institution.tag,
             color: user.institution.color
         });
-    });
-
-    // HQ: Nachricht löschen
-    socket.on('hq_delete_msg', (msgId) => {
-        // Wir müssen herausfinden, wer der User ist (via Room Hack oder Session)
-        // Einfachheitshalber: Wir suchen in allen Inboxes (unschön aber wirksam für Demo)
-        Object.values(INSTITUTIONS).forEach(inst => {
-            const inboxPath = path.join(DATA_DIR, inst.inboxFile);
-            if (fs.existsSync(inboxPath)) {
-                let inbox = JSON.parse(fs.readFileSync(inboxPath, 'utf8'));
-                const originalLen = inbox.length;
-                inbox = inbox.filter(m => m.id !== msgId);
-
-                if (inbox.length !== originalLen) {
-                    fs.writeFileSync(inboxPath, JSON.stringify(inbox, null, 2));
-                    // Update an den HQ Raum senden
-                    // Wir finden den Key anhand des Values (etwas hacky, aber spart Code)
-                    const key = Object.keys(INSTITUTIONS).find(k => INSTITUTIONS[k] === inst);
-                    io.to(`HQ_${key}`).emit('hq_inbox_data', inbox);
-                }
-            }
-        });
-    });
-
-    // 4. INBOX ABRUFEN (Nur für HQ)
-    socket.on('hq_fetch_inbox', () => {
-        // Sicherheits-Check: Ist der Socket im HQ Room?
-        if (socket.rooms.has('HQ_CHANNEL')) {
-            socket.emit('hq_inbox_data', hqInbox);
-        }
     });
 
     // --- INSTITUTIONS DIRECTORY ---

@@ -68,6 +68,25 @@ header {
     letter-spacing: 1px;
 }
 
+/* EKLAT ASCII LOGO STYLE */
+.ascii-logo {
+    font-family: 'Courier New', monospace; /* Oder deine Terminal Font */
+    font-weight: bold;
+    color: #00ff00; /* Hacker Grün */
+    white-space: pre; /* WICHTIG: Damit die Leerzeichen bleiben! */
+    line-height: 1.0;
+    text-shadow: 0 0 5px rgba(0, 255, 0, 0.7); /* Leichter Cyber-Glow */
+    margin-bottom: 20px;
+    display: inline-block;
+}
+
+.loading-bar-container {
+    font-family: 'Courier New', monospace;
+    color: #00ff00;
+    margin-top: 10px;
+    margin-bottom: 20px;
+}
+
 /* STATUS BEREICH (Rechts) */
 .status-bar {
     display: flex;
@@ -413,6 +432,13 @@ header {
     flex-shrink: 0;
     padding-top: 2px; /* Ausrichtung */
     text-shadow: 0 0 8px var(--accent-dim);
+}
+
+.hidden-boot {
+    display: none !important;
+    visibility: hidden !important;
+    opacity: 0 !important;
+    pointer-events: none !important;
 }
 
 .input-container {

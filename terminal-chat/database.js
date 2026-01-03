@@ -86,6 +86,20 @@ async function initDB() {
         CREATE INDEX IF NOT EXISTS idx_inst_tag ON institutions(tag);
     `);
 
+    // INBOX SYSTEM (Ersatz für JSON Files)
+    await db.exec(`
+        CREATE TABLE IF NOT EXISTS institution_inbox (
+                                                         id INTEGER PRIMARY KEY AUTOINCREMENT,
+                                                         institution_tag TEXT NOT NULL,
+                                                         sender_name TEXT,
+                                                         sender_key TEXT,
+                                                         content TEXT,
+                                                         timestamp INTEGER,
+                                                         is_read BOOLEAN DEFAULT 0
+        );
+        CREATE INDEX IF NOT EXISTS idx_inbox_tag ON institution_inbox(institution_tag);
+    `);
+
     // 2. REGISTRATION REQUESTS
     await db.exec(`
         CREATE TABLE IF NOT EXISTS registration_requests (
@@ -510,6 +524,33 @@ async function getVipByHandle(handle) {
     return await db.get('SELECT * FROM vips WHERE handle = ?', [handle]);
 }
 
+// --- INBOX SYSTEM ---
+
+async function addInboxMessage(tag, senderName, senderKey, content) {
+    const db = await dbPromise;
+    try {
+        await db.run(`
+            INSERT INTO institution_inbox (institution_tag, sender_name, sender_key, content, timestamp)
+            VALUES (?, ?, ?, ?, ?)
+        `, [tag, senderName, senderKey, content, Date.now()]);
+        return true;
+    } catch (e) {
+        console.error("[DB] Inbox Write Error:", e);
+        return false;
+    }
+}
+
+async function getInboxMessages(tag) {
+    const db = await dbPromise;
+    // Neueste Nachrichten zuerst
+    return await db.all('SELECT * FROM institution_inbox WHERE institution_tag = ? ORDER BY timestamp DESC', [tag]);
+}
+
+async function deleteInboxMessage(id) {
+    const db = await dbPromise;
+    await db.run('DELETE FROM institution_inbox WHERE id = ?', [id]);
+}
+
 module.exports = {
     initDB,
     // Institutions
@@ -518,6 +559,10 @@ module.exports = {
     verifyPassword,
     getPublicInstitutionList,
     updateInstitutionDescription,
+    // Institutions Inbox
+    addInboxMessage,
+    getInboxMessages,
+    deleteInboxMessage,
     // Requests
     createRequest,
     verifyRequestEmail,
